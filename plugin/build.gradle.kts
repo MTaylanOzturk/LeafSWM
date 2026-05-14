@@ -1,12 +1,12 @@
 plugins {
-    id("asp.base-conventions")
-    id("asp.publishing-conventions")
+  //  id("asp.base-conventions")
     id("net.minecrell.plugin-yml.paper")
     id("com.gradleup.shadow")
 }
 
 dependencies {
     compileOnly(project(":slime-api"))
+    implementation(project(":core"))
     implementation(project(":loaders"))
 
     implementation(libs.configurate.yaml)
@@ -40,11 +40,10 @@ tasks {
 }
 
 paper {
-    name = "ASPaperPlugin"
-    description = "ASP plugin for Paper, providing utilities for the ASP platform"
+    name = "ASLeafPlugin"
+    description = "ASP plugin for Leaf, providing utilities for the ASP platform"
     version = "\${gitCommitId}"
     apiVersion = "1.21"
     main = "com.infernalsuite.asp.plugin.SWPlugin"
     authors = listOf("InfernalSuite")
-    bootstrapper = "com.infernalsuite.asp.plugin.SlimePluginBootstrap"
 }
