@@ -1,10 +1,5 @@
 package com.infernalsuite.asp.plugin;
 
-import com.infernalsuite.asp.plugin.commands.CommandManager;
-import com.infernalsuite.asp.plugin.config.ConfigManager;
-import com.infernalsuite.asp.plugin.config.WorldData;
-import com.infernalsuite.asp.plugin.config.WorldsConfig;
-import com.infernalsuite.asp.plugin.loader.LoaderManager;
 import com.infernalsuite.asp.api.AdvancedSlimePaperAPI;
 import com.infernalsuite.asp.api.SlimeNMSBridge;
 import com.infernalsuite.asp.api.exceptions.CorruptedWorldException;
@@ -13,7 +8,11 @@ import com.infernalsuite.asp.api.exceptions.UnknownWorldException;
 import com.infernalsuite.asp.api.loaders.SlimeLoader;
 import com.infernalsuite.asp.api.world.SlimeWorld;
 import com.infernalsuite.asp.api.world.properties.SlimePropertyMap;
-import org.bstats.bukkit.Metrics;
+import com.infernalsuite.asp.plugin.commands.CommandManager;
+import com.infernalsuite.asp.plugin.config.ConfigManager;
+import com.infernalsuite.asp.plugin.config.WorldData;
+import com.infernalsuite.asp.plugin.config.WorldsConfig;
+import com.infernalsuite.asp.plugin.loader.LoaderManager;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -25,7 +24,6 @@ import java.util.logging.Level;
 public class SWPlugin extends JavaPlugin {
 
     private static final AdvancedSlimePaperAPI ASP = AdvancedSlimePaperAPI.instance();
-    private static final int BSTATS_ID = 5419;
 
     private final Map<String, SlimeWorld> worldsToLoad = new HashMap<>();
     private LoaderManager loaderManager;
@@ -81,7 +79,6 @@ public class SWPlugin extends JavaPlugin {
 
     @Override
     public void onEnable() {
-        Metrics metrics = new Metrics(this, BSTATS_ID);
 
         CommandManager commandManager = new CommandManager(this);
 
