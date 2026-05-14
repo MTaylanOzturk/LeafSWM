@@ -5,7 +5,9 @@ import com.infernalsuite.asp.api.world.SlimeChunk;
 import com.infernalsuite.asp.api.world.SlimeChunkSection;
 import com.infernalsuite.asp.api.world.SlimeWorld;
 import com.infernalsuite.asp.serialization.SlimeWorldReader;
-import com.infernalsuite.asp.serialization.slime.reader.impl.v1_9.upgrade.*;
+import com.infernalsuite.asp.serialization.slime.reader.impl.v1_9.upgrade.v1_13WorldUpgrade;
+import com.infernalsuite.asp.serialization.slime.reader.impl.v1_9.upgrade.v1_16WorldUpgrade;
+import com.infernalsuite.asp.serialization.slime.reader.impl.v1_9.upgrade.v1_18WorldUpgrade;
 import com.infernalsuite.asp.skeleton.SkeletonSlimeWorld;
 import com.infernalsuite.asp.skeleton.SlimeChunkSectionSkeleton;
 import com.infernalsuite.asp.skeleton.SlimeChunkSkeleton;
@@ -66,7 +68,10 @@ class v1_v9SlimeConverter implements SlimeWorldReader<v1_9SlimeWorld> {
                     slimeChunk.tileEntities,
                     slimeChunk.entities,
                     new HashMap<>(),
-                    slimeChunk.upgradeData
+                    slimeChunk.upgradeData,
+                    null,
+                    null,
+                    null
             ));
         }
 

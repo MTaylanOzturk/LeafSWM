@@ -1,12 +1,11 @@
 package com.infernalsuite.asp.serialization.slime.reader.impl;
 
-import com.infernalsuite.asp.serialization.slime.reader.VersionedByteSlimeWorldReader;
 import com.infernalsuite.asp.api.exceptions.CorruptedWorldException;
 import com.infernalsuite.asp.api.exceptions.NewerFormatException;
 import com.infernalsuite.asp.api.loaders.SlimeLoader;
 import com.infernalsuite.asp.api.world.SlimeWorld;
 import com.infernalsuite.asp.api.world.properties.SlimePropertyMap;
-
+import com.infernalsuite.asp.serialization.slime.reader.VersionedByteSlimeWorldReader;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.DataInputStream;

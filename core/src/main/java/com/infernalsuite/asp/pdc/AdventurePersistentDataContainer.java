@@ -76,6 +76,11 @@ public class AdventurePersistentDataContainer implements PersistentDataContainer
     }
 
     @Override
+    public int getSize() {
+        return this.tags.size();
+    }
+
+    @Override
     public <P, C> boolean has(@NotNull NamespacedKey key, @NotNull PersistentDataType<P, C> type) {
         Preconditions.checkNotNull(key, "The key cannot be null");
         Preconditions.checkNotNull(type, "The provided type cannot be null");
@@ -110,10 +115,10 @@ public class AdventurePersistentDataContainer implements PersistentDataContainer
     @Override
     public @NotNull Set<NamespacedKey> getKeys() {
         return this.tags.keySet().stream()
-                .map(key -> NS_KEY_PATTERN.split(key, 2))
-                .filter(keyData -> keyData.length == 2)
-                .map(keyData -> new NamespacedKey(keyData[0], keyData[1]))
-                .collect(Collectors.toUnmodifiableSet());
+            .map(key -> NS_KEY_PATTERN.split(key, 2))
+            .filter(keyData -> keyData.length == 2)
+            .map(keyData -> new NamespacedKey(keyData[0], keyData[1]))
+            .collect(Collectors.toUnmodifiableSet());
     }
 
     @Override

@@ -1,6 +1,7 @@
-package com.infernalsuite.asp.serialization.slime.reader.impl.v11;
+package com.infernalsuite.asp.serialization.slime.reader.impl.v13;
 
 import com.github.luben.zstd.Zstd;
+import com.infernalsuite.asp.SlimeLogger;
 import com.infernalsuite.asp.Util;
 import com.infernalsuite.asp.api.exceptions.CorruptedWorldException;
 import com.infernalsuite.asp.api.exceptions.NewerFormatException;
@@ -14,52 +15,48 @@ import com.infernalsuite.asp.skeleton.SlimeChunkSkeleton;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.kyori.adventure.nbt.*;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-public class v11SlimeWorldDeSerializer implements com.infernalsuite.asp.serialization.slime.reader.VersionedByteSlimeWorldReader<SlimeWorld> {
+public class v13SlimeWorldDeSerializer implements com.infernalsuite.asp.serialization.slime.reader.VersionedByteSlimeWorldReader<SlimeWorld> {
 
     public static final int ARRAY_SIZE = 16 * 16 * 16 / (8 / 4);
 
     @Override
     public SlimeWorld deserializeWorld(byte version, @Nullable SlimeLoader loader, String worldName, DataInputStream dataStream, SlimePropertyMap propertyMap, boolean readOnly) throws IOException, CorruptedWorldException, NewerFormatException {
         int worldVersion = dataStream.readInt();
+        byte additionalWorldData = dataStream.readByte();
 
         byte[] chunkBytes = readCompressed(dataStream);
-        Long2ObjectMap<SlimeChunk> chunks = readChunks(propertyMap, chunkBytes);
+        Long2ObjectMap<SlimeChunk> chunks = readChunks(propertyMap, additionalWorldData, chunkBytes);
 
         byte[] extraTagBytes = readCompressed(dataStream);
         CompoundBinaryTag extraTag = readCompound(extraTagBytes);
 
-        SlimePropertyMap worldPropertyMap = propertyMap;
-        CompoundBinaryTag propertiesMap = extraTag.get("properties") != null
-                ? extraTag.getCompound("properties")
-                : null;
-
-        if (propertiesMap != null) {
-            Map<String, BinaryTag> wpm = new HashMap<>();
-            propertiesMap.forEach(entry -> wpm.put(entry.getKey(), entry.getValue()));
-
-            worldPropertyMap = new SlimePropertyMap(wpm);
-            worldPropertyMap.merge(propertyMap); // Override world properties
-        }
-
         ConcurrentMap<String, BinaryTag> extraData = new ConcurrentHashMap<>();
         extraTag.forEach(entry -> extraData.put(entry.getKey(), entry.getValue()));
+
+        SlimePropertyMap worldPropertyMap = propertyMap;
+        if (extraData.containsKey("properties")) {
+            CompoundBinaryTag serializedSlimeProperties = (CompoundBinaryTag) extraData.get("properties");
+            worldPropertyMap = SlimePropertyMap.fromCompound(serializedSlimeProperties);
+            worldPropertyMap.merge(propertyMap);
+        }
 
         return new com.infernalsuite.asp.skeleton.SkeletonSlimeWorld(worldName, loader, readOnly, chunks, extraData, worldPropertyMap, worldVersion);
     }
 
-    private static Long2ObjectMap<SlimeChunk> readChunks(SlimePropertyMap slimePropertyMap, byte[] chunkBytes) throws IOException {
+    private static Long2ObjectMap<SlimeChunk> readChunks(SlimePropertyMap slimePropertyMap, byte additionalWorldData, byte[] chunkBytes) throws IOException {
         Long2ObjectMap<SlimeChunk> chunkMap = new Long2ObjectOpenHashMap<>();
         DataInputStream chunkData = new DataInputStream(new ByteArrayInputStream(chunkBytes));
 
@@ -72,12 +69,12 @@ public class v11SlimeWorldDeSerializer implements com.infernalsuite.asp.serializ
             // Sections
             int sectionCount = chunkData.readInt();
             SlimeChunkSection[] chunkSections = new SlimeChunkSection[sectionCount];
-
             for (int sectionId = 0; sectionId < sectionCount; sectionId++) {
+                byte sectionFlags = chunkData.readByte();
 
                 // Block Light Nibble Array
                 NibbleArray blockLightArray;
-                if (chunkData.readBoolean()) {
+                if ((sectionFlags & 1) == 1) {
                     byte[] blockLightByteArray = new byte[ARRAY_SIZE];
                     chunkData.read(blockLightByteArray);
                     blockLightArray = new NibbleArray(blockLightByteArray);
@@ -87,7 +84,7 @@ public class v11SlimeWorldDeSerializer implements com.infernalsuite.asp.serializ
 
                 // Sky Light Nibble Array
                 NibbleArray skyLightArray;
-                if (chunkData.readBoolean()) {
+                if (((sectionFlags >> 1) & 1) == 1) {
                     byte[] skyLightByteArray = new byte[ARRAY_SIZE];
                     chunkData.read(skyLightByteArray);
                     skyLightArray = new NibbleArray(skyLightByteArray);
@@ -113,41 +110,71 @@ public class v11SlimeWorldDeSerializer implements com.infernalsuite.asp.serializ
             chunkData.read(heightMapData);
             CompoundBinaryTag heightMaps = readCompound(heightMapData);
 
+            CompoundBinaryTag poiChunk = null;
+            if(v13AdditionalWorldData.POI_CHUNKS.isSet(additionalWorldData)) {
+                byte[] poiData = new byte[chunkData.readInt()];
+                chunkData.read(poiData);
+                poiChunk = readCompound(poiData);
+            }
+
+            ListBinaryTag blockTicks = null;
+            if(v13AdditionalWorldData.BLOCK_TICKS.isSet(additionalWorldData)) {
+                byte[] blockTickData = new byte[chunkData.readInt()];
+                chunkData.read(blockTickData);
+                CompoundBinaryTag tag = readCompound(blockTickData);
+                blockTicks = tag.getList("block_ticks", BinaryTagTypes.COMPOUND);
+            }
+            ListBinaryTag fluidTicks = null;
+            if(v13AdditionalWorldData.FLUID_TICKS.isSet(additionalWorldData)) {
+                byte[] fluidTickData = new byte[chunkData.readInt()];
+                chunkData.read(fluidTickData);
+                CompoundBinaryTag tag = readCompound(fluidTickData);
+                fluidTicks = tag.getList("fluid_ticks", BinaryTagTypes.COMPOUND);
+            }
+
+            int countOfUnsupportedData = v13AdditionalWorldData.countUnsupportedFlags(additionalWorldData);
+            for (int i1 = 0; i1 < countOfUnsupportedData; i1++) {
+                byte[] randomData = new byte[chunkData.readInt()];
+                chunkData.read(randomData);
+            }
+            if(countOfUnsupportedData > 0) {
+                SlimeLogger.warn("Unsupported additional world data found in chunk " + x + ", " + z + ". This should not cause any issues, however this data will be lost on save.");
+            }
+
             // Tile Entities
 
-            int compressedTileEntitiesLength = chunkData.readInt();
-            int decompressedTileEntitiesLength = chunkData.readInt();
-            byte[] compressedTileEntitiesData = new byte[compressedTileEntitiesLength];
-            byte[] decompressedTileEntitiesData = new byte[decompressedTileEntitiesLength];
-            chunkData.read(compressedTileEntitiesData);
-            Zstd.decompress(decompressedTileEntitiesData, compressedTileEntitiesData);
-
-            CompoundBinaryTag tileEntitiesCompound = readCompound(decompressedTileEntitiesData);
-
-            ListBinaryTag tileEntitiesTag = tileEntitiesCompound.getList("tileEntities", BinaryTagTypes.COMPOUND);
-            List<CompoundBinaryTag> serializedTileEntities = new ArrayList<>(tileEntitiesTag.size());
-            for (BinaryTag binaryTag : tileEntitiesTag) {
-                serializedTileEntities.add((CompoundBinaryTag) binaryTag);
+            byte[] tileEntitiesRaw = read(chunkData);
+            List<CompoundBinaryTag> tileEntities;
+            CompoundBinaryTag tileEntitiesCompound = readCompound(tileEntitiesRaw);
+            if (tileEntitiesCompound.isEmpty()) {
+                tileEntities = Collections.emptyList();
+            } else {
+                tileEntities = tileEntitiesCompound.getList("tileEntities", BinaryTagTypes.COMPOUND).stream()
+                        .map(tag -> (CompoundBinaryTag) tag)
+                        .toList();
             }
 
             // Entities
 
-            int compressedEntitiesLength = chunkData.readInt();
-            int decompressedEntitiesLength = chunkData.readInt();
-            byte[] compressedEntitiesData = new byte[compressedEntitiesLength];
-            byte[] decompressedEntitiesData = new byte[decompressedEntitiesLength];
-            chunkData.read(compressedEntitiesData);
-            Zstd.decompress(decompressedEntitiesData, compressedEntitiesData);
-
-            CompoundBinaryTag entitiesCompound = readCompound(decompressedEntitiesData);
-            ListBinaryTag entitiesTag = entitiesCompound.getList("entities", BinaryTagTypes.COMPOUND);
-            List<CompoundBinaryTag> serializedEntities = new ArrayList<>(entitiesTag.size());
-            for (BinaryTag binaryTag : entitiesTag) {
-                serializedEntities.add((CompoundBinaryTag) binaryTag);
+            byte[] entitiesRaw = read(chunkData);
+            List<CompoundBinaryTag> entities;
+            CompoundBinaryTag entitiesCompound = readCompound(entitiesRaw);
+            if (entitiesCompound.isEmpty()) {
+                entities = Collections.emptyList();
+            } else {
+                entities = entitiesCompound.getList("entities", BinaryTagTypes.COMPOUND).stream()
+                        .map(tag -> (CompoundBinaryTag) tag)
+                        .toList();
             }
-            
-            chunkMap.put(Util.chunkPosition(x, z),
-                    new SlimeChunkSkeleton(x, z, chunkSections, heightMaps, serializedTileEntities, serializedEntities, new HashMap<>(), null, null, null, null));
+
+            // Extra Tag
+            byte[] rawExtra = read(chunkData);
+            CompoundBinaryTag extra = readCompound(rawExtra);
+
+            Map<String, BinaryTag> extraData = new HashMap<>();
+            extra.forEach(entry -> extraData.put(entry.getKey(), entry.getValue()));
+
+            chunkMap.put(Util.chunkPosition(x, z), new SlimeChunkSkeleton(x, z, chunkSections, heightMaps, tileEntities, entities, extraData, null, poiChunk, blockTicks, fluidTicks));
         }
         return chunkMap;
     }
@@ -162,7 +189,14 @@ public class v11SlimeWorldDeSerializer implements com.infernalsuite.asp.serializ
         return decompressedData;
     }
 
-    private static CompoundBinaryTag readCompound(byte[] tagBytes) throws IOException {
+    private static byte[] read(DataInputStream stream) throws IOException {
+        int length = stream.readInt();
+        byte[] data = new byte[length];
+        stream.read(data);
+        return data;
+    }
+
+    private static @NotNull CompoundBinaryTag readCompound(byte[] tagBytes) throws IOException {
         if (tagBytes.length == 0) return CompoundBinaryTag.empty();
 
         return BinaryTagIO.unlimitedReader().read(new ByteArrayInputStream(tagBytes));

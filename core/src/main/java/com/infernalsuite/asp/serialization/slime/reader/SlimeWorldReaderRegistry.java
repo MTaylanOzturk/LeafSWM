@@ -1,6 +1,5 @@
 package com.infernalsuite.asp.serialization.slime.reader;
 
-import com.infernalsuite.asp.SlimeLogger;
 import com.infernalsuite.asp.api.exceptions.CorruptedWorldException;
 import com.infernalsuite.asp.api.exceptions.NewerFormatException;
 import com.infernalsuite.asp.api.loaders.SlimeLoader;
@@ -10,6 +9,7 @@ import com.infernalsuite.asp.api.world.properties.SlimePropertyMap;
 import com.infernalsuite.asp.serialization.slime.reader.impl.v10.v10WorldFormat;
 import com.infernalsuite.asp.serialization.slime.reader.impl.v11.v11WorldFormat;
 import com.infernalsuite.asp.serialization.slime.reader.impl.v12.v12WorldFormat;
+import com.infernalsuite.asp.serialization.slime.reader.impl.v13.v13WorldFormat;
 import com.infernalsuite.asp.serialization.slime.reader.impl.v1_9.v1_9WorldFormat;
 
 import java.io.ByteArrayInputStream;
@@ -28,6 +28,7 @@ public class SlimeWorldReaderRegistry {
         register(v10WorldFormat.FORMAT, 10);
         register(v11WorldFormat.FORMAT, 11);
         register(v12WorldFormat.FORMAT, 12);
+        register(v13WorldFormat.FORMAT, 13);
     }
 
     private static void register(VersionedByteSlimeWorldReader<SlimeWorld> format, int... bytes) {
@@ -42,7 +43,6 @@ public class SlimeWorldReaderRegistry {
         dataStream.read(fileHeader);
 
         if (!Arrays.equals(SlimeFormat.SLIME_HEADER, fileHeader)) {
-            SlimeLogger.LOGGER.severe("Invalid file header for world: " + worldName + ". Expected: " + Arrays.toString(SlimeFormat.SLIME_HEADER) + ", but got: " + Arrays.toString(fileHeader));
             throw new CorruptedWorldException(worldName);
         }
 
