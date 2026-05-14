@@ -39,3 +39,18 @@ for (name in listOf("leaf-api", "leaf-server")) {
     val projName = name.lowercase(Locale.ENGLISH)
     include(projName)
 }
+
+// Advanced Slime World Manager modules
+include("slime-api", "core", "plugin", "loaders", "importer")
+
+// Loader sub-modules
+include("loaders:mongo-loader")
+findProject(":loaders:mongo-loader")?.name = "mongo-loader"
+include("loaders:api-loader")
+findProject(":loaders:api-loader")?.name = "api-loader"
+include("loaders:file-loader")
+findProject(":loaders:file-loader")?.name = "file-loader"
+include("loaders:mysql-loader")
+findProject(":loaders:mysql-loader")?.name = "mysql-loader"
+include("loaders:redis-loader")
+findProject(":loaders:redis-loader")?.name = "redis-loader"
