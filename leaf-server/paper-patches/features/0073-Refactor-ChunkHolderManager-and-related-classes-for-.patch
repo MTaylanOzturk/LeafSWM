@@ -1,0 +1,494 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MahmutTaylanOzturk <ozturkmahmuttaylan@gmail.com>
+Date: Thu, 14 May 2026 20:25:00 +0300
+Subject: [PATCH] Refactor ChunkHolderManager and related classes for improved
+ readability and consistency
+
+
+diff --git a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+index 51a01f86fee58052cfa10febc2b3ddf8f6dd2ad7..623cea75e512ad7bfa5d15e64d5c0865e96d28b3 100644
+--- a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
++++ b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+@@ -3,6 +3,7 @@ package io.papermc.paper.world;
+ import com.google.common.io.Files;
+ import com.mojang.logging.LogUtils;
+ import com.mojang.serialization.Dynamic;
++import net.minecraft.core.Registry;
+ import net.minecraft.core.registries.Registries;
+ import net.minecraft.nbt.NbtException;
+ import net.minecraft.nbt.ReportedNbtException;
+@@ -21,6 +22,7 @@ import org.apache.commons.io.FileUtils;
+ import org.bukkit.World;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
++
+ import java.io.File;
+ import java.io.IOException;
+ import java.util.Locale;
+@@ -38,7 +40,8 @@ public record PaperWorldLoader(MinecraftServer server, String levelId) {
+         String worldType,
+         ResourceKey<LevelStem> stemKey,
+         boolean enabled
+-    ) {}
++    ) {
++    }
+ 
+     private WorldLoadingInfo getWorldInfo(
+         final String levelId,
+@@ -108,7 +111,20 @@ public record PaperWorldLoader(MinecraftServer server, String levelId) {
+ 
+     // Loosely modeled on code in net.minecraft.server.Main
+     public void loadInitialWorlds() {
+-        for (final LevelStem stem : this.server.registryAccess().lookupOrThrow(Registries.LEVEL_STEM)) {
++        //ASP start - overwrite vanilla worlds if needed
++        Registry<LevelStem> registry = this.server.registryAccess().lookupOrThrow(Registries.LEVEL_STEM);
++        for (final LevelStem stem : registry) {
++            ResourceKey<LevelStem> levelStemKey = registry.getResourceKey(stem).get();
++            if (levelStemKey == LevelStem.NETHER && com.infernalsuite.asp.SlimeNMSBridgeImpl.instance().loadNetherOverride()) {
++                continue;
++            }
++            if (levelStemKey == LevelStem.END && com.infernalsuite.asp.SlimeNMSBridgeImpl.instance().loadEndOverride()) {
++                continue;
++            }
++            if (levelStemKey == LevelStem.OVERWORLD && com.infernalsuite.asp.SlimeNMSBridgeImpl.instance().loadOverworldOverride()) {
++                continue;
++            }
++            //ASP end - overwrite vanilla worlds if needed
+             final WorldLoadingInfo info = this.getWorldInfo(this.levelId, stem);
+             this.migrateWorldFolder(info);
+             if (!info.enabled()) {
+@@ -172,7 +188,8 @@ public record PaperWorldLoader(MinecraftServer server, String levelId) {
+         }
+     }
+ 
+-    public record LevelDataResult(@Nullable Dynamic<?> dataTag, boolean fatalError) {}
++    public record LevelDataResult(@Nullable Dynamic<?> dataTag, boolean fatalError) {
++    }
+ 
+     // Based on code in net.minecraft.server.Main
+     public static LevelDataResult getLevelData(
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index 84469777d64c1c6e4c0bf35d3beed920dfb00c4c..1960f7bbbf8e5653d72c5b939294662a65c7f416 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -1306,6 +1306,13 @@ public final class CraftServer implements Server {
+             handle.getChunkSource().close(save);
+             io.papermc.paper.FeatureHooks.closeEntityManager(handle, save); // SPIGOT-6722: close entityManager // Paper - chunk system
+             handle.levelStorageAccess.close();
++
++            //ASP start - avoid temp storage leak during runtime
++            if (handle instanceof com.infernalsuite.asp.level.SlimeLevelInstance asp) {
++                asp.deleteTempFiles();
++            }
++            //ASP end
++
+         } catch (Exception ex) {
+             this.getLogger().log(Level.SEVERE, null, ex);
+         }
+diff --git a/src/main/java/org/spigotmc/SpigotConfig.java b/src/main/java/org/spigotmc/SpigotConfig.java
+index f21403e8d7b8365030b66620fa320290caa6b70a..38d8a3904584862664bb7747a286fea03999234b 100644
+--- a/src/main/java/org/spigotmc/SpigotConfig.java
++++ b/src/main/java/org/spigotmc/SpigotConfig.java
+@@ -1,19 +1,6 @@
+ package org.spigotmc;
+ 
+ import com.google.common.base.Throwables;
+-import java.io.File;
+-import java.io.IOException;
+-import java.lang.reflect.InvocationTargetException;
+-import java.lang.reflect.Method;
+-import java.lang.reflect.Modifier;
+-import java.util.Arrays;
+-import java.util.HashMap;
+-import java.util.HashSet;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Objects;
+-import java.util.Set;
+-import java.util.logging.Level;
+ import net.minecraft.core.registries.BuiltInRegistries;
+ import net.minecraft.resources.Identifier;
+ import net.minecraft.server.MinecraftServer;
+@@ -29,6 +16,14 @@ import org.bukkit.configuration.ConfigurationSection;
+ import org.bukkit.configuration.InvalidConfigurationException;
+ import org.bukkit.configuration.file.YamlConfiguration;
+ 
++import java.io.File;
++import java.io.IOException;
++import java.lang.reflect.InvocationTargetException;
++import java.lang.reflect.Method;
++import java.lang.reflect.Modifier;
++import java.util.*;
++import java.util.logging.Level;
++
+ public class SpigotConfig {
+ 
+     private static File CONFIG_FILE;
+@@ -80,6 +75,11 @@ public class SpigotConfig {
+     }
+ 
+     public static void readConfig(Class<?> clazz, Object instance) {
++        readConfig(clazz, instance, true);
++    }
++
++    public static void readConfig(Class<?> clazz, Object instance, boolean save) {
++        // ASP end - Improve Slime IO
+         for (Method method : clazz.getDeclaredMethods()) {
+             if (Modifier.isPrivate(method.getModifiers())) {
+                 if (method.getParameterTypes().length == 0 && method.getReturnType() == Void.TYPE) {
+@@ -96,7 +96,10 @@ public class SpigotConfig {
+         }
+ 
+         try {
+-            SpigotConfig.config.save(SpigotConfig.CONFIG_FILE);
++            if (save) {
++                SpigotConfig.config.save(SpigotConfig.CONFIG_FILE);
++            }
++            // ASP end - Improve Slime IO
+         } catch (IOException ex) {
+             Bukkit.getLogger().log(Level.SEVERE, "Could not save " + SpigotConfig.CONFIG_FILE, ex);
+         }
+@@ -132,12 +135,14 @@ public class SpigotConfig {
+     }
+ 
+     public static boolean logCommands;
++
+     private static void logCommands() {
+         SpigotConfig.logCommands = SpigotConfig.getBoolean("commands.log", true);
+     }
+ 
+     public static int tabComplete;
+     public static boolean sendNamespaced;
++
+     private static void tabComplete() {
+         if (SpigotConfig.version < 6) {
+             boolean oldValue = SpigotConfig.getBoolean("commands.tab-complete", true);
+@@ -176,6 +181,7 @@ public class SpigotConfig {
+     public static boolean restartOnCrash = true;
+     public static String restartScript = "./start.sh";
+     public static String restartMessage;
++
+     private static void watchdog() {
+         SpigotConfig.timeoutTime = SpigotConfig.getInt("settings.timeout-time", SpigotConfig.timeoutTime);
+         SpigotConfig.restartOnCrash = SpigotConfig.getBoolean("settings.restart-on-crash", SpigotConfig.restartOnCrash);
+@@ -185,6 +191,7 @@ public class SpigotConfig {
+     }
+ 
+     public static boolean bungee;
++
+     private static void bungee() {
+         if (SpigotConfig.version < 4) {
+             SpigotConfig.set("settings.bungeecord", false);
+@@ -231,18 +238,21 @@ public class SpigotConfig {
+     }
+ 
+     public static int playerSample;
++
+     private static void playerSample() {
+         SpigotConfig.playerSample = Math.max(SpigotConfig.getInt("settings.sample-count", 12), 0); // Paper - Avoid negative counts
+         Bukkit.getLogger().log(Level.INFO, "Server Ping Player Sample Count: {0}", playerSample); // Paper - Use logger
+     }
+ 
+     public static int playerShuffle;
++
+     private static void playerShuffle() {
+         SpigotConfig.playerShuffle = SpigotConfig.getInt("settings.player-shuffle", 0);
+     }
+ 
+     public static boolean enableSpamExclusions = false;
+     public static List<String> spamExclusions;
++
+     private static void spamExclusions() {
+         SpigotConfig.spamExclusions = SpigotConfig.getList("commands.spam-exclusions", List.of("/skill"));
+         Object enabled = SpigotConfig.config.get("commands.enable-spam-exclusions");
+@@ -261,11 +271,13 @@ public class SpigotConfig {
+     }
+ 
+     public static boolean silentCommandBlocks;
++
+     private static void silentCommandBlocks() {
+         SpigotConfig.silentCommandBlocks = SpigotConfig.getBoolean("commands.silent-commandblock-console", false);
+     }
+ 
+     public static Set<String> replaceCommands;
++
+     private static void replaceCommands() {
+         if (SpigotConfig.config.contains("replace-commands")) {
+             SpigotConfig.set("commands.replace-commands", SpigotConfig.config.getStringList("replace-commands"));
+@@ -276,21 +288,25 @@ public class SpigotConfig {
+     }
+ 
+     public static int userCacheCap;
++
+     private static void userCacheCap() {
+         SpigotConfig.userCacheCap = SpigotConfig.getInt("settings.user-cache-size", 1000);
+     }
+ 
+     public static boolean saveUserCacheOnStopOnly;
++
+     private static void saveUserCacheOnStopOnly() {
+         SpigotConfig.saveUserCacheOnStopOnly = SpigotConfig.getBoolean("settings.save-user-cache-on-stop-only", false);
+     }
+ 
+     public static double movedWronglyThreshold;
++
+     private static void movedWronglyThreshold() {
+         SpigotConfig.movedWronglyThreshold = SpigotConfig.getDouble("settings.moved-wrongly-threshold", 0.0625D);
+     }
+ 
+     public static double movedTooQuicklyMultiplier;
++
+     private static void movedTooQuicklyMultiplier() {
+         SpigotConfig.movedTooQuicklyMultiplier = SpigotConfig.getDouble("settings.moved-too-quickly-multiplier", 10.0D);
+     }
+@@ -299,6 +315,7 @@ public class SpigotConfig {
+     public static double maxHealth = 1024;
+     public static double movementSpeed = 1024;
+     public static double attackDamage = 2048;
++
+     private static void attributeMaxes() {
+         SpigotConfig.maxAbsorption = SpigotConfig.getDouble("settings.attribute.maxAbsorption.max", SpigotConfig.maxAbsorption);
+         ((RangedAttribute) Attributes.MAX_ABSORPTION.value()).maxValue = SpigotConfig.maxAbsorption;
+@@ -311,6 +328,7 @@ public class SpigotConfig {
+     }
+ 
+     public static boolean debug;
++
+     private static void debug() {
+         SpigotConfig.debug = SpigotConfig.getBoolean("settings.debug", false);
+ 
+@@ -329,6 +347,7 @@ public class SpigotConfig {
+ 
+     public static boolean disableAdvancementSaving;
+     public static List<String> disabledAdvancements;
++
+     private static void disabledAdvancements() {
+         SpigotConfig.disableAdvancementSaving = SpigotConfig.getBoolean("advancements.disable-saving", false);
+         SpigotConfig.disabledAdvancements = SpigotConfig.getList("advancements.disabled", List.of("minecraft:story/disabled"));
+@@ -336,17 +355,20 @@ public class SpigotConfig {
+ 
+     public static boolean logVillagerDeaths;
+     public static boolean logNamedDeaths;
++
+     private static void logDeaths() {
+         SpigotConfig.logVillagerDeaths = SpigotConfig.getBoolean("settings.log-villager-deaths", true);
+         SpigotConfig.logNamedDeaths = SpigotConfig.getBoolean("settings.log-named-deaths", true);
+     }
+ 
+     public static boolean disablePlayerDataSaving;
++
+     private static void disablePlayerDataSaving() {
+         SpigotConfig.disablePlayerDataSaving = SpigotConfig.getBoolean("players.disable-saving", false);
+     }
+ 
+     public static boolean belowZeroGenerationInExistingChunks;
++
+     private static void belowZeroGenerationInExistingChunks() {
+         SpigotConfig.belowZeroGenerationInExistingChunks = SpigotConfig.getBoolean("world-settings.default.below-zero-generation-in-existing-chunks", true);
+     }
+diff --git a/src/main/java/org/spigotmc/SpigotWorldConfig.java b/src/main/java/org/spigotmc/SpigotWorldConfig.java
+index 43c6240ec2855c0f668ce04de29d22a223d2612f..ebc63fee259a7a11478d6785d0fe080f07b56a4e 100644
+--- a/src/main/java/org/spigotmc/SpigotWorldConfig.java
++++ b/src/main/java/org/spigotmc/SpigotWorldConfig.java
+@@ -1,9 +1,10 @@
+ package org.spigotmc;
+ 
+-import java.util.List;
+ import org.bukkit.Bukkit;
+ import org.bukkit.configuration.file.YamlConfiguration;
+ 
++import java.util.List;
++
+ public class SpigotWorldConfig {
+ 
+     private final String worldName;
+@@ -11,16 +12,26 @@ public class SpigotWorldConfig {
+     private boolean verbose;
+ 
+     public SpigotWorldConfig(String worldName) {
++        this(worldName, true);
++    }
++    // ASP end - Improve Slime IO
++
++    public SpigotWorldConfig(String worldName, boolean saveOnLoad) { // ASP - Improve Slime IO
+         this.worldName = worldName;
+         this.config = SpigotConfig.config;
+-        this.init();
++        this.init(saveOnLoad); // ASP - Improve Slime IO
+     }
+ 
+     public void init() {
++        init(true);
++    }
++
++
++    public void init(boolean saveOnLoad) {
+         this.verbose = this.getBoolean("verbose", false); // Paper
+ 
+         this.log("-------- World Settings For [" + this.worldName + "] --------");
+-        SpigotConfig.readConfig(SpigotWorldConfig.class, this);
++        SpigotConfig.readConfig(SpigotWorldConfig.class, this, saveOnLoad); // ASP - Improve Slime IO
+     }
+ 
+     private void log(String s) {
+@@ -134,18 +145,21 @@ public class SpigotWorldConfig {
+     }
+ 
+     public double itemMerge;
++
+     private void itemMerge() {
+         this.itemMerge = this.getDouble("merge-radius.item", 0.5);
+         this.log("Item Merge Radius: " + this.itemMerge);
+     }
+ 
+     public double expMerge;
++
+     private void expMerge() {
+         this.expMerge = this.getDouble("merge-radius.exp", -1);
+         this.log("Experience Merge Radius: " + this.expMerge);
+     }
+ 
+     public int viewDistance;
++
+     private void viewDistance() {
+         if (SpigotConfig.version < 12) {
+             this.set("view-distance", null);
+@@ -162,6 +176,7 @@ public class SpigotWorldConfig {
+     }
+ 
+     public int simulationDistance;
++
+     private void simulationDistance() {
+         Object simulationDistanceObject = this.get("simulation-distance", "default");
+         this.simulationDistance = (simulationDistanceObject) instanceof Number ? ((Number) simulationDistanceObject).intValue() : -1;
+@@ -173,12 +188,14 @@ public class SpigotWorldConfig {
+     }
+ 
+     public byte mobSpawnRange;
++
+     private void mobSpawnRange() {
+         this.mobSpawnRange = (byte) getInt("mob-spawn-range", 8); // Paper - Vanilla
+         this.log("Mob Spawn Range: " + this.mobSpawnRange);
+     }
+ 
+     public int itemDespawnRate;
++
+     private void itemDespawnRate() {
+         this.itemDespawnRate = this.getInt("item-despawn-rate", 6000);
+         this.log("Item Despawn Rate: " + this.itemDespawnRate);
+@@ -249,6 +266,7 @@ public class SpigotWorldConfig {
+     public int miscTrackingRange = 96;
+     public int displayTrackingRange = 128;
+     public int otherTrackingRange = 64;
++
+     private void trackingRange() {
+         this.playerTrackingRange = this.getInt("entity-tracking-range.players", this.playerTrackingRange);
+         this.animalTrackingRange = this.getInt("entity-tracking-range.animals", this.animalTrackingRange);
+@@ -263,6 +281,7 @@ public class SpigotWorldConfig {
+     public int hopperCheck;
+     public int hopperAmount;
+     public boolean hopperCanLoadChunks;
++
+     private void hoppers() {
+         // Set the tick delay between hopper item movements
+         this.hopperTransfer = this.getInt("ticks-per.hopper-transfer", 8);
+@@ -277,6 +296,7 @@ public class SpigotWorldConfig {
+ 
+     public int arrowDespawnRate;
+     public int tridentDespawnRate;
++
+     private void arrowDespawnRate() {
+         this.arrowDespawnRate = this.getInt("arrow-despawn-rate", 1200);
+         this.tridentDespawnRate = this.getInt("trident-despawn-rate", this.arrowDespawnRate);
+@@ -284,34 +304,40 @@ public class SpigotWorldConfig {
+     }
+ 
+     public boolean zombieAggressiveTowardsVillager;
++
+     private void zombieAggressiveTowardsVillager() {
+         this.zombieAggressiveTowardsVillager = this.getBoolean("zombie-aggressive-towards-villager", true);
+         this.log("Zombie Aggressive Towards Villager: " + this.zombieAggressiveTowardsVillager);
+     }
+ 
+     public boolean nerfSpawnerMobs;
++
+     private void nerfSpawnerMobs() {
+         this.nerfSpawnerMobs = this.getBoolean("nerf-spawner-mobs", false);
+         this.log("Nerfing mobs spawned from spawners: " + this.nerfSpawnerMobs);
+     }
+ 
+     public boolean enableZombiePigmenPortalSpawns;
++
+     private void enableZombiePigmenPortalSpawns() {
+         this.enableZombiePigmenPortalSpawns = this.getBoolean("enable-zombie-pigmen-portal-spawns", true);
+         this.log("Allow Zombie Pigmen to spawn from portal blocks: " + this.enableZombiePigmenPortalSpawns);
+     }
+ 
+     public int dragonDeathSoundRadius;
++
+     private void keepDragonDeathPerWorld() {
+         this.dragonDeathSoundRadius = this.getInt("dragon-death-sound-radius", 0);
+     }
+ 
+     public int witherSpawnSoundRadius;
++
+     private void witherSpawnSoundRadius() {
+         this.witherSpawnSoundRadius = this.getInt("wither-spawn-sound-radius", 0);
+     }
+ 
+     public int endPortalSoundRadius;
++
+     private void endPortalSoundRadius() {
+         this.endPortalSoundRadius = this.getInt("end-portal-sound-radius", 0);
+     }
+@@ -376,6 +402,7 @@ public class SpigotWorldConfig {
+     public float swimMultiplier;
+     public float sprintMultiplier;
+     public float otherMultiplier;
++
+     private void initHunger() {
+         if (SpigotConfig.version < 10) {
+             this.set("hunger.walk-exhaustion", null);
+@@ -395,6 +422,7 @@ public class SpigotWorldConfig {
+ 
+     public int currentPrimedTnt = 0;
+     public int maxTntTicksPerTick;
++
+     private void maxTntPerTick() {
+         if (SpigotConfig.version < 7) {
+             this.set("max-tnt-per-tick", 100);
+@@ -404,12 +432,14 @@ public class SpigotWorldConfig {
+     }
+ 
+     public int hangingTickFrequency;
++
+     private void hangingTickFrequency() {
+         this.hangingTickFrequency = this.getInt("hanging-tick-frequency", 100);
+     }
+ 
+     public int tileMaxTickTime;
+     public int entityMaxTickTime;
++
+     private void maxTickTimes() {
+         this.tileMaxTickTime = this.getInt("max-tick-time.tile", 50);
+         this.entityMaxTickTime = this.getInt("max-tick-time.entity", 50);
+@@ -417,16 +447,19 @@ public class SpigotWorldConfig {
+     }
+ 
+     public int thunderChance;
++
+     private void thunderChance() {
+         this.thunderChance = this.getInt("thunder-chance", 100000);
+     }
+ 
+     public boolean belowZeroGenerationInExistingChunks;
++
+     private void belowZeroGenerationInExistingChunks() {
+         this.belowZeroGenerationInExistingChunks = this.getBoolean("below-zero-generation-in-existing-chunks", true);
+     }
+ 
+     public boolean unloadFrozenChunks;
++
+     private void unloadFrozenChunks() {
+         this.unloadFrozenChunks = this.getBoolean("unload-frozen-chunks", false);
+     }

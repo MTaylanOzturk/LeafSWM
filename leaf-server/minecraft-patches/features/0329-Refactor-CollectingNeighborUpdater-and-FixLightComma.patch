@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MahmutTaylanOzturk <ozturkmahmuttaylan@gmail.com>
+Date: Thu, 14 May 2026 18:51:26 +0300
+Subject: [PATCH] Refactor CollectingNeighborUpdater and FixLightCommand for
+ improved logic and performance; adjust max processing limit in ServerLevel
+
+
+diff --git a/io/papermc/paper/command/subcommands/FixLightCommand.java b/io/papermc/paper/command/subcommands/FixLightCommand.java
+index 8e8d1a38290c2dc3f88deda64d050e89273a5b89..b8701ea4dba92a2624df43cb92fa01e999fb8e1c 100644
+--- a/io/papermc/paper/command/subcommands/FixLightCommand.java
++++ b/io/papermc/paper/command/subcommands/FixLightCommand.java
+@@ -36,10 +36,6 @@ public final class FixLightCommand implements PaperSubcommand {
+     }
+ 
+     private void doFixLight(final CommandSender sender, final String[] args) {
+-        if (!(sender instanceof Player)) {
+-            sender.sendMessage(text("Only players can use this command", RED));
+-            return;
+-        }
+         @Nullable Runnable post = null;
+         int radius = 2;
+         if (args.length > 0) {
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index bc3a6dca2f777af744009b0e49ab0c41bc98e88c..c77628a1f9be15032a2afbe460a3a2a3d4df020b 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -835,7 +835,7 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+         org.dreeam.leaf.async.world.WorldReadRequest request;
+         int processed = 0;
+         // Limit processing per tick to avoid stalling the tick loop
+-        int maxToProcess = 16384; // Consider making this configurable
++        int maxToProcess = 999999; // Consider making this configurable
+ 
+         while (processed < maxToProcess && (request = this.asyncReadRequestQueue.poll()) != null) {
+             processed++;
+diff --git a/net/minecraft/world/level/redstone/CollectingNeighborUpdater.java b/net/minecraft/world/level/redstone/CollectingNeighborUpdater.java
+index 0a60ff97dc77108997568c75c94327cb6858018f..98fc7d51b6635c122f1f12f37135d0b8de2f7681 100644
+--- a/net/minecraft/world/level/redstone/CollectingNeighborUpdater.java
++++ b/net/minecraft/world/level/redstone/CollectingNeighborUpdater.java
+@@ -79,6 +79,11 @@ public class CollectingNeighborUpdater implements NeighborUpdater {
+                 }
+ 
+                 this.addedThisLayer.clear();
++
++                if (this.stack.isEmpty()) {
++                    continue;
++                }
++
+                 CollectingNeighborUpdater.NeighborUpdates neighborUpdates = this.stack.peek();
+                 if (this.debugListener != null) {
+                     neighborUpdates.forEachUpdatedPos(this.debugListener);

@@ -1,0 +1,642 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MahmutTaylanOzturk <ozturkmahmuttaylan@gmail.com>
+Date: Thu, 14 May 2026 18:51:26 +0300
+Subject: [PATCH] Refactor CollectingNeighborUpdater and FixLightCommand for
+ improved logic and performance; adjust max processing limit in ServerLevel
+
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index 403277294d03cc21a073a8296d9f272f55c61f01..84469777d64c1c6e4c0bf35d3beed920dfb00c4c 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -8,6 +8,7 @@ import com.google.common.collect.ImmutableList;
+ import com.google.common.collect.Iterators;
+ import com.google.common.collect.Lists;
+ import com.google.common.collect.MapMaker;
++import com.infernalsuite.asp.AdvancedSlimePaper;
+ import com.mojang.brigadier.StringReader;
+ import com.mojang.brigadier.exceptions.CommandSyntaxException;
+ import com.mojang.serialization.Dynamic;
+@@ -16,34 +17,7 @@ import io.papermc.paper.configuration.GlobalConfiguration;
+ import io.papermc.paper.configuration.PaperServerConfiguration;
+ import io.papermc.paper.configuration.ServerConfiguration;
+ import io.papermc.paper.world.PaperWorldLoader;
+-import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
+-import java.awt.image.BufferedImage;
+-import java.io.ByteArrayOutputStream;
+-import java.io.File;
+-import java.io.FileInputStream;
+-import java.io.FileNotFoundException;
+-import java.io.IOException;
+-import java.io.InputStreamReader;
+-import java.net.InetAddress;
+-import java.nio.charset.StandardCharsets;
+-import java.util.ArrayList;
+-import java.util.Collections;
+-import java.util.Date;
+-import java.util.HashSet;
+-import java.util.Iterator;
+-import java.util.LinkedHashMap;
+-import java.util.LinkedHashSet;
+-import java.util.List;
+-import java.util.Locale;
+-import java.util.Map;
+-import java.util.Optional;
+-import java.util.Set;
+-import java.util.UUID;
+-import java.util.function.Consumer;
+-import java.util.logging.Level;
+-import java.util.logging.Logger;
+-import java.util.stream.Collectors;
+-import javax.imageio.ImageIO;
++import net.md_5.bungee.api.chat.BaseComponent;
+ import net.minecraft.Optionull;
+ import net.minecraft.advancements.AdvancementHolder;
+ import net.minecraft.commands.CommandSourceStack;
+@@ -53,8 +27,8 @@ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.RegistryAccess;
+ import net.minecraft.core.registries.BuiltInRegistries;
+ import net.minecraft.core.registries.Registries;
+-import net.minecraft.resources.ResourceKey;
+ import net.minecraft.resources.Identifier;
++import net.minecraft.resources.ResourceKey;
+ import net.minecraft.server.MinecraftServer;
+ import net.minecraft.server.ReloadableServerRegistries;
+ import net.minecraft.server.WorldLoader;
+@@ -67,12 +41,7 @@ import net.minecraft.server.dedicated.DedicatedServerSettings;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.server.level.ServerPlayer;
+ import net.minecraft.server.level.TicketType;
+-import net.minecraft.server.players.IpBanListEntry;
+-import net.minecraft.server.players.NameAndId;
+-import net.minecraft.server.players.PlayerList;
+-import net.minecraft.server.players.ServerOpListEntry;
+-import net.minecraft.server.players.UserBanListEntry;
+-import net.minecraft.server.players.UserWhiteListEntry;
++import net.minecraft.server.players.*;
+ import net.minecraft.tags.TagKey;
+ import net.minecraft.util.GsonHelper;
+ import net.minecraft.util.datafix.DataFixers;
+@@ -82,25 +51,18 @@ import net.minecraft.world.entity.EntityType;
+ import net.minecraft.world.entity.ai.village.VillageSiege;
+ import net.minecraft.world.entity.npc.CatSpawner;
+ import net.minecraft.world.entity.npc.wanderingtrader.WanderingTraderSpawner;
+-import net.minecraft.world.inventory.AbstractContainerMenu;
+-import net.minecraft.world.inventory.CraftingContainer;
+-import net.minecraft.world.inventory.CraftingMenu;
+-import net.minecraft.world.inventory.ResultContainer;
+-import net.minecraft.world.inventory.TransientCraftingContainer;
++import net.minecraft.world.inventory.*;
+ import net.minecraft.world.item.Item;
+ import net.minecraft.world.item.MapItem;
+-import net.minecraft.world.item.crafting.CraftingInput;
++import net.minecraft.world.item.crafting.*;
+ import net.minecraft.world.item.crafting.CraftingRecipe;
+-import net.minecraft.world.item.crafting.RecipeHolder;
+-import net.minecraft.world.item.crafting.RecipeType;
+-import net.minecraft.world.item.crafting.RepairItemRecipe;
+ import net.minecraft.world.level.CustomSpawner;
+-import net.minecraft.world.level.gamerules.GameRules;
+ import net.minecraft.world.level.GameType;
+ import net.minecraft.world.level.LevelSettings;
+ import net.minecraft.world.level.biome.BiomeManager;
+ import net.minecraft.world.level.block.Block;
+ import net.minecraft.world.level.dimension.LevelStem;
++import net.minecraft.world.level.gamerules.GameRules;
+ import net.minecraft.world.level.levelgen.PatrolSpawner;
+ import net.minecraft.world.level.levelgen.PhantomSpawner;
+ import net.minecraft.world.level.levelgen.WorldDimensions;
+@@ -114,37 +76,13 @@ import net.minecraft.world.level.storage.PlayerDataStorage;
+ import net.minecraft.world.level.storage.PrimaryLevelData;
+ import net.minecraft.world.level.validation.ContentValidationException;
+ import org.apache.commons.lang3.StringUtils;
+-import org.bukkit.BanList;
+-import org.bukkit.Bukkit;
+-import org.bukkit.GameMode;
+-import org.bukkit.Keyed;
+-import org.bukkit.Location;
+-import org.bukkit.NamespacedKey;
+-import org.bukkit.OfflinePlayer;
+-import org.bukkit.Registry;
+-import org.bukkit.Server;
+-import org.bukkit.ServerLinks;
+-import org.bukkit.ServerTickManager;
+-import org.bukkit.StructureType;
+-import org.bukkit.UnsafeValues;
++import org.bukkit.*;
+ import org.bukkit.Warning.WarningState;
+-import org.bukkit.World;
+ import org.bukkit.World.Environment;
+-import org.bukkit.WorldBorder;
+-import org.bukkit.WorldCreator;
+ import org.bukkit.block.BlockType;
+ import org.bukkit.block.data.BlockData;
+-import org.bukkit.boss.BarColor;
+-import org.bukkit.boss.BarFlag;
+-import org.bukkit.boss.BarStyle;
+-import org.bukkit.boss.BossBar;
+-import org.bukkit.boss.KeyedBossBar;
+-import org.bukkit.command.Command;
+-import org.bukkit.command.CommandException;
+-import org.bukkit.command.CommandSender;
+-import org.bukkit.command.ConsoleCommandSender;
+-import org.bukkit.command.PluginCommand;
+-import org.bukkit.command.SimpleCommandMap;
++import org.bukkit.boss.*;
++import org.bukkit.command.*;
+ import org.bukkit.configuration.ConfigurationSection;
+ import org.bukkit.configuration.file.YamlConfiguration;
+ import org.bukkit.configuration.serialization.ConfigurationSerialization;
+@@ -161,22 +99,7 @@ import org.bukkit.craftbukkit.event.CraftEventFactory;
+ import org.bukkit.craftbukkit.generator.CraftWorldInfo;
+ import org.bukkit.craftbukkit.generator.OldCraftChunkData;
+ import org.bukkit.craftbukkit.help.SimpleHelpMap;
+-import org.bukkit.craftbukkit.inventory.CraftBlastingRecipe;
+-import org.bukkit.craftbukkit.inventory.CraftCampfireRecipe;
+-import org.bukkit.craftbukkit.inventory.CraftFurnaceRecipe;
+-import org.bukkit.craftbukkit.inventory.CraftItemCraftResult;
+-import org.bukkit.craftbukkit.inventory.CraftItemFactory;
+-import org.bukkit.craftbukkit.inventory.CraftItemStack;
+-import org.bukkit.craftbukkit.inventory.CraftMerchantCustom;
+-import org.bukkit.craftbukkit.inventory.CraftRecipe;
+-import org.bukkit.craftbukkit.inventory.CraftShapedRecipe;
+-import org.bukkit.craftbukkit.inventory.CraftShapelessRecipe;
+-import org.bukkit.craftbukkit.inventory.CraftSmithingTransformRecipe;
+-import org.bukkit.craftbukkit.inventory.CraftSmithingTrimRecipe;
+-import org.bukkit.craftbukkit.inventory.CraftSmokingRecipe;
+-import org.bukkit.craftbukkit.inventory.CraftStonecuttingRecipe;
+-import org.bukkit.craftbukkit.inventory.CraftTransmuteRecipe;
+-import org.bukkit.craftbukkit.inventory.RecipeIterator;
++import org.bukkit.craftbukkit.inventory.*;
+ import org.bukkit.craftbukkit.inventory.util.CraftInventoryCreator;
+ import org.bukkit.craftbukkit.map.CraftMapColorCache;
+ import org.bukkit.craftbukkit.map.CraftMapCursor;
+@@ -190,20 +113,8 @@ import org.bukkit.craftbukkit.scheduler.CraftScheduler;
+ import org.bukkit.craftbukkit.scoreboard.CraftCriteria;
+ import org.bukkit.craftbukkit.scoreboard.CraftScoreboardManager;
+ import org.bukkit.craftbukkit.structure.CraftStructureManager;
+-import org.bukkit.craftbukkit.tag.CraftBlockTag;
+-import org.bukkit.craftbukkit.tag.CraftDamageTag;
+-import org.bukkit.craftbukkit.tag.CraftEntityTag;
+-import org.bukkit.craftbukkit.tag.CraftFluidTag;
+-import org.bukkit.craftbukkit.tag.CraftGameEventTag;
+-import org.bukkit.craftbukkit.tag.CraftItemTag;
+-import org.bukkit.craftbukkit.util.ApiVersion;
+-import org.bukkit.craftbukkit.util.CraftChatMessage;
+-import org.bukkit.craftbukkit.util.CraftIconCache;
+-import org.bukkit.craftbukkit.util.CraftLocation;
+-import org.bukkit.craftbukkit.util.CraftMagicNumbers;
+-import org.bukkit.craftbukkit.util.CraftNamespacedKey;
+-import org.bukkit.craftbukkit.util.CraftSpawnCategory;
+-import org.bukkit.craftbukkit.util.Versioning;
++import org.bukkit.craftbukkit.tag.*;
++import org.bukkit.craftbukkit.util.*;
+ import org.bukkit.craftbukkit.util.permissions.CraftDefaultPermissions;
+ import org.bukkit.entity.Entity;
+ import org.bukkit.entity.Player;
+@@ -216,23 +127,14 @@ import org.bukkit.generator.BiomeProvider;
+ import org.bukkit.generator.ChunkGenerator;
+ import org.bukkit.generator.WorldInfo;
+ import org.bukkit.help.HelpMap;
++import org.bukkit.inventory.*;
+ import org.bukkit.inventory.BlastingRecipe;
+-import org.bukkit.inventory.CampfireRecipe;
+-import org.bukkit.inventory.ComplexRecipe;
+-import org.bukkit.inventory.FurnaceRecipe;
+-import org.bukkit.inventory.Inventory;
+-import org.bukkit.inventory.InventoryHolder;
+-import org.bukkit.inventory.InventoryView;
+-import org.bukkit.inventory.ItemCraftResult;
+-import org.bukkit.inventory.ItemStack;
+-import org.bukkit.inventory.Merchant;
+ import org.bukkit.inventory.Recipe;
+ import org.bukkit.inventory.ShapedRecipe;
+ import org.bukkit.inventory.ShapelessRecipe;
+ import org.bukkit.inventory.SmithingTransformRecipe;
+ import org.bukkit.inventory.SmithingTrimRecipe;
+ import org.bukkit.inventory.SmokingRecipe;
+-import org.bukkit.inventory.StonecuttingRecipe;
+ import org.bukkit.inventory.TransmuteRecipe;
+ import org.bukkit.loot.LootTable;
+ import org.bukkit.map.MapPalette;
+@@ -240,12 +142,7 @@ import org.bukkit.map.MapView;
+ import org.bukkit.packs.ResourcePack;
+ import org.bukkit.permissions.Permissible;
+ import org.bukkit.permissions.Permission;
+-import org.bukkit.plugin.Plugin;
+-import org.bukkit.plugin.PluginLoadOrder;
+-import org.bukkit.plugin.PluginManager;
+-import org.bukkit.plugin.ServicesManager;
+-import org.bukkit.plugin.SimplePluginManager;
+-import org.bukkit.plugin.SimpleServicesManager;
++import org.bukkit.plugin.*;
+ import org.bukkit.plugin.messaging.Messenger;
+ import org.bukkit.plugin.messaging.StandardMessenger;
+ import org.bukkit.profile.PlayerProfile;
+@@ -260,7 +157,16 @@ import org.yaml.snakeyaml.Yaml;
+ import org.yaml.snakeyaml.constructor.SafeConstructor;
+ import org.yaml.snakeyaml.error.MarkedYAMLException;
+ 
+-import net.md_5.bungee.api.chat.BaseComponent; // Spigot
++import javax.imageio.ImageIO;
++import java.awt.image.BufferedImage;
++import java.io.*;
++import java.net.InetAddress;
++import java.nio.charset.StandardCharsets;
++import java.util.*;
++import java.util.function.Consumer;
++import java.util.logging.Level;
++import java.util.logging.Logger;
++import java.util.stream.Collectors;
+ 
+ public final class CraftServer implements Server {
+     private final String serverName = io.papermc.paper.ServerBuildInfo.buildInfo().brandName();
+@@ -419,10 +325,11 @@ public final class CraftServer implements Server {
+         this.pluginManager = new SimplePluginManager(this, commandMap);
+         this.paperPluginManager = new io.papermc.paper.plugin.manager.PaperPluginManagerImpl(this, this.commandMap, pluginManager);
+         this.pluginManager.paperPluginManager = this.paperPluginManager;
+-         // Paper end
++        // Paper end
+         // Purpur start - Language API
+         org.purpurmc.purpur.language.Language.setLanguage(new org.purpurmc.purpur.language.Language() {
+             private net.minecraft.locale.Language language = net.minecraft.locale.Language.getInstance();
++
+             @Override
+             public boolean has(@org.jetbrains.annotations.NotNull String key) {
+                 return language.has(key);
+@@ -551,10 +458,10 @@ public final class CraftServer implements Server {
+         }
+ 
+         this.activeCompatibilities = compatibilities
+-                .getKeys(false)
+-                .stream()
+-                .filter(compatibilities::getBoolean)
+-                .collect(Collectors.toSet());
++            .getKeys(false)
++            .stream()
++            .filter(compatibilities::getBoolean)
++            .collect(Collectors.toSet());
+ 
+         if (!this.activeCompatibilities.isEmpty()) {
+             this.logger.info("Using following compatibilities: `" + Joiner.on("`, `").join(this.activeCompatibilities) + "`, this will affect performance and other plugins behavior.");
+@@ -580,8 +487,7 @@ public final class CraftServer implements Server {
+     }
+ 
+     private List<File> extraPluginJars() {
+-        @SuppressWarnings("unchecked")
+-        final List<File> jars = (List<File>) this.console.options.valuesOf("add-plugin");
++        @SuppressWarnings("unchecked") final List<File> jars = (List<File>) this.console.options.valuesOf("add-plugin");
+         final List<File> list = new ArrayList<>();
+         for (final File file : jars) {
+             if (!file.exists()) {
+@@ -605,7 +511,8 @@ public final class CraftServer implements Server {
+         if (type == PluginLoadOrder.STARTUP) {
+             this.helpMap.clear();
+             this.helpMap.initializeGeneralTopics();
+-            if (io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins) loadCustomPermissions(); // Paper
++            if (io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins)
++                loadCustomPermissions(); // Paper
+         }
+ 
+         Plugin[] plugins = this.pluginManager.getPlugins();
+@@ -622,7 +529,8 @@ public final class CraftServer implements Server {
+             // Spigot end
+             DefaultPermissions.registerCorePermissions();
+             CraftDefaultPermissions.registerCorePermissions();
+-            if (!io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins) this.loadCustomPermissions(); // Paper
++            if (!io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins)
++                this.loadCustomPermissions(); // Paper
+             this.syncCommands();
+         }
+     }
+@@ -650,7 +558,7 @@ public final class CraftServer implements Server {
+                     permsToLoad.add(perm);
+                 } else {
+                     this.getLogger().log(Level.WARNING, "Plugin " + plugin.getDescription().getFullName() + " tried to register permission '" + perm.getName() + "' but it's already registered");
+-                // Paper end
++                    // Paper end
+                 }
+             }
+             this.paperPluginManager.addPermissions(permsToLoad); // Paper
+@@ -1057,7 +965,8 @@ public final class CraftServer implements Server {
+         while (pollCount < 50 && this.getScheduler().getActiveWorkers().size() > 0) {
+             try {
+                 Thread.sleep(50);
+-            } catch (InterruptedException e) {}
++            } catch (InterruptedException e) {
++            }
+             pollCount++;
+         }
+ 
+@@ -1070,14 +979,16 @@ public final class CraftServer implements Server {
+                 plugin.getDescription().getFullName(),
+                 "This plugin is not properly shutting down its async tasks when it is being reloaded.  This may cause conflicts with the newly loaded version of the plugin"
+             ));
+-            if (console.isDebugging()) io.papermc.paper.util.TraceUtil.dumpTraceForThread(worker.getThread(), "still running"); // Paper - Debugging
++            if (console.isDebugging())
++                io.papermc.paper.util.TraceUtil.dumpTraceForThread(worker.getThread(), "still running"); // Paper - Debugging
+         }
+         io.papermc.paper.plugin.PluginInitializerManager.reload(this.console); // Paper
+         this.loadPlugins();
+         this.enablePlugins(PluginLoadOrder.STARTUP);
+         this.enablePlugins(PluginLoadOrder.POSTWORLD);
+         this.spark.registerCommandAfterPlugins(this); // Paper - spark
+-        if (io.papermc.paper.plugin.PluginInitializerManager.instance().pluginRemapper != null) io.papermc.paper.plugin.PluginInitializerManager.instance().pluginRemapper.pluginsEnabled(); // Paper - Remap plugins
++        if (io.papermc.paper.plugin.PluginInitializerManager.instance().pluginRemapper != null)
++            io.papermc.paper.plugin.PluginInitializerManager.instance().pluginRemapper.pluginsEnabled(); // Paper - Remap plugins
+         // Paper start - brigadier command API
+         io.papermc.paper.command.brigadier.PaperCommands.INSTANCE.setValid(); // to clear invalid state for event fire below
+         io.papermc.paper.plugin.lifecycle.event.LifecycleEventRunner.INSTANCE.callReloadableRegistrarEvent(io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents.COMMANDS, io.papermc.paper.command.brigadier.PaperCommands.INSTANCE, org.bukkit.plugin.Plugin.class, io.papermc.paper.plugin.lifecycle.event.registrar.ReloadableRegistrarEvent.Cause.RELOAD); // call commands event for regular plugins
+@@ -1093,10 +1004,11 @@ public final class CraftServer implements Server {
+         int pollCount = 0;
+ 
+         // Wait for at most 5 seconds for plugins to close their threads
+-        while (pollCount < 10*5 && getScheduler().getActiveWorkers().size() > 0) {
++        while (pollCount < 10 * 5 && getScheduler().getActiveWorkers().size() > 0) {
+             try {
+                 Thread.sleep(100);
+-            } catch (InterruptedException e) {}
++            } catch (InterruptedException e) {
++            }
+             pollCount++;
+         }
+ 
+@@ -1116,7 +1028,8 @@ public final class CraftServer implements Server {
+                 getLogger().log(Level.SEVERE, "  " + element);
+             }
+             // Gale end - Airplane - print stack trace for plugins not shutting down tasks
+-            if (console.isDebugging()) io.papermc.paper.util.TraceUtil.dumpTraceForThread(worker.getThread(), "still running"); // Paper - Debugging
++            if (console.isDebugging())
++                io.papermc.paper.util.TraceUtil.dumpTraceForThread(worker.getThread(), "still running"); // Paper - Debugging
+         }
+     }
+     // Paper end - Wait for Async Tasks during shutdown
+@@ -1150,7 +1063,7 @@ public final class CraftServer implements Server {
+         }
+     }
+ 
+-    @SuppressWarnings({ "unchecked", "finally" })
++    @SuppressWarnings({"unchecked", "finally"})
+     private void loadCustomPermissions() {
+         File file = new File(this.configuration.getString("settings.permissions-file"));
+         FileInputStream stream;
+@@ -1178,7 +1091,8 @@ public final class CraftServer implements Server {
+         } finally {
+             try {
+                 stream.close();
+-            } catch (IOException ex) {}
++            } catch (IOException ex) {
++            }
+         }
+ 
+         if (perms == null) {
+@@ -1382,6 +1296,8 @@ public final class CraftServer implements Server {
+             return false;
+         }
+ 
++        AdvancedSlimePaper.instance().onWorldUnload(world.getName());
++
+         try {
+             if (save) {
+                 handle.save(null, true, false); // Paper - Fix saving in unloadWorld
+@@ -1560,7 +1476,8 @@ public final class CraftServer implements Server {
+ 
+     @Override
+     public void sendBlockHighlight(Location location, int duration, String text, org.bukkit.Color color, int transparency) {
+-        if (transparency < 0 || transparency > 255) throw new IllegalArgumentException("transparency is outside of 0-255 range");
++        if (transparency < 0 || transparency > 255)
++            throw new IllegalArgumentException("transparency is outside of 0-255 range");
+         sendBlockHighlight(location, duration, text, transparency << 24 | color.asRGB());
+     }
+ 
+@@ -2168,13 +2085,13 @@ public final class CraftServer implements Server {
+     @Override
+     public <B extends BanList<E>, E> B getBanList(final io.papermc.paper.ban.BanListType<B> type) {
+         Preconditions.checkArgument(type != null, "BanList.BanType cannot be null");
+-       if (type == io.papermc.paper.ban.BanListType.IP) {
+-           return (B) new CraftIpBanList(this.playerList.getIpBans());
+-       } else if (type == io.papermc.paper.ban.BanListType.PROFILE) {
+-          return (B) new CraftProfileBanList(this.playerList.getBans());
+-       } else {
+-           throw new IllegalArgumentException("Unknown BanListType: " + type);
+-       }
++        if (type == io.papermc.paper.ban.BanListType.IP) {
++            return (B) new CraftIpBanList(this.playerList.getIpBans());
++        } else if (type == io.papermc.paper.ban.BanListType.PROFILE) {
++            return (B) new CraftProfileBanList(this.playerList.getBans());
++        } else {
++            throw new IllegalArgumentException("Unknown BanListType: " + type);
++        }
+     }
+ 
+     @Override
+@@ -2740,9 +2657,9 @@ public final class CraftServer implements Server {
+ 
+         ReloadableServerRegistries.Holder registry = this.getServer().reloadableRegistries();
+         return registry.lookup().lookup(Registries.LOOT_TABLE)
+-                .flatMap((lookup) -> lookup.get(CraftLootTable.bukkitKeyToMinecraft(key)))
+-                .map((holder) -> new CraftLootTable(key, holder.value()))
+-                .orElse(null);
++            .flatMap((lookup) -> lookup.get(CraftLootTable.bukkitKeyToMinecraft(key)))
++            .map((holder) -> new CraftLootTable(key, holder.value()))
++            .orElse(null);
+     }
+ 
+     @Override
+@@ -2829,8 +2746,7 @@ public final class CraftServer implements Server {
+ 
+         // Gale start - Gale configuration - API
+         @Override
+-        public YamlConfiguration getGaleConfig()
+-        {
++        public YamlConfiguration getGaleConfig() {
+             return CraftServer.this.console.galeConfigurations.createLegacyObject(CraftServer.this.console);
+         }
+         // Gale end - Gale configuration - API
+@@ -2866,7 +2782,8 @@ public final class CraftServer implements Server {
+ 
+     @Override
+     public double[] getTPS() {
+-        if (org.dreeam.leaf.config.modules.misc.Including5sIngetTPS.enabled) return getTPSIncluding5SecondAverage(); // Leaf - Including 5s in getTPS()
++        if (org.dreeam.leaf.config.modules.misc.Including5sIngetTPS.enabled)
++            return getTPSIncluding5SecondAverage(); // Leaf - Including 5s in getTPS()
+         return this.getServer().getTPS();
+     }
+ 
+@@ -2903,7 +2820,8 @@ public final class CraftServer implements Server {
+ 
+     @Override
+     public void playSound(final net.kyori.adventure.sound.Sound sound) {
+-        if (sound.seed().isEmpty()) org.spigotmc.AsyncCatcher.catchOp("play sound; cannot generate seed with world random");
++        if (sound.seed().isEmpty())
++            org.spigotmc.AsyncCatcher.catchOp("play sound; cannot generate seed with world random");
+         final long seed = sound.seed().orElseGet(this.console.overworld().getRandom()::nextLong);
+         for (ServerPlayer player : this.playerList.getPlayers()) {
+             player.connection.send(io.papermc.paper.adventure.PaperAdventure.asSoundPacket(sound, player.getX(), player.getY(), player.getZ(), seed, null));
+@@ -2918,7 +2836,8 @@ public final class CraftServer implements Server {
+ 
+     @Override
+     public void playSound(final net.kyori.adventure.sound.Sound sound, final net.kyori.adventure.sound.Sound.Emitter emitter) {
+-        if (sound.seed().isEmpty()) org.spigotmc.AsyncCatcher.catchOp("play sound; cannot generate seed with world random");
++        if (sound.seed().isEmpty())
++            org.spigotmc.AsyncCatcher.catchOp("play sound; cannot generate seed with world random");
+         final long seed = sound.seed().orElseGet(this.console.overworld().getRandom()::nextLong);
+         if (emitter == net.kyori.adventure.sound.Sound.Emitter.self()) {
+             for (ServerPlayer player : this.playerList.getPlayers()) {
+@@ -2983,7 +2902,8 @@ public final class CraftServer implements Server {
+     @Override
+     public void reloadPermissions() {
+         pluginManager.clearPermissions();
+-        if (io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins) loadCustomPermissions();
++        if (io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins)
++            loadCustomPermissions();
+         for (Plugin plugin : pluginManager.getPlugins()) {
+             for (Permission perm : plugin.getDescription().getPermissions()) {
+                 try {
+@@ -2993,7 +2913,8 @@ public final class CraftServer implements Server {
+                 }
+             }
+         }
+-        if (!io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins) loadCustomPermissions();
++        if (!io.papermc.paper.configuration.GlobalConfiguration.get().misc.loadPermissionsYmlBeforePlugins)
++            loadCustomPermissions();
+         DefaultPermissions.registerCorePermissions();
+         CraftDefaultPermissions.registerCorePermissions();
+     }
+@@ -3001,8 +2922,8 @@ public final class CraftServer implements Server {
+     @Override
+     public boolean reloadCommandAliases() {
+         Set<String> removals = getCommandAliases().keySet().stream()
+-                .map(key -> key.toLowerCase(java.util.Locale.ENGLISH))
+-                .collect(java.util.stream.Collectors.toSet());
++            .map(key -> key.toLowerCase(java.util.Locale.ENGLISH))
++            .collect(java.util.stream.Collectors.toSet());
+         getCommandMap().getKnownCommands().keySet().removeIf(removals::contains);
+         File file = getCommandsConfigFile();
+         try {
+diff --git a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
+index aacd08358fd118146cde0df0f71226c9cff9f2d3..08baeabeb16b123e1ed9aa12e73506355d54f349 100644
+--- a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
++++ b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
+@@ -1,11 +1,6 @@
+ package org.bukkit.craftbukkit.block;
+ 
+ import com.google.common.base.Preconditions;
+-import java.util.ArrayList;
+-import java.util.Collection;
+-import java.util.Collections;
+-import java.util.List;
+-import java.util.stream.Collectors;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.Direction;
+ import net.minecraft.server.level.ServerLevel;
+@@ -26,18 +21,8 @@ import net.minecraft.world.phys.HitResult;
+ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.phys.shapes.CollisionContext;
+ import net.minecraft.world.phys.shapes.VoxelShape;
+-import org.bukkit.Bukkit;
+-import org.bukkit.Chunk;
+-import org.bukkit.FluidCollisionMode;
+-import org.bukkit.Location;
+-import org.bukkit.Material;
+-import org.bukkit.TreeType;
+-import org.bukkit.World;
+-import org.bukkit.block.Biome;
+-import org.bukkit.block.Block;
+-import org.bukkit.block.BlockFace;
+-import org.bukkit.block.BlockState;
+-import org.bukkit.block.PistonMoveReaction;
++import org.bukkit.*;
++import org.bukkit.block.*;
+ import org.bukkit.block.data.BlockData;
+ import org.bukkit.craftbukkit.CraftFluidCollisionMode;
+ import org.bukkit.craftbukkit.CraftWorld;
+@@ -61,6 +46,13 @@ import org.bukkit.util.BoundingBox;
+ import org.bukkit.util.RayTraceResult;
+ import org.bukkit.util.Vector;
+ 
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.Collections;
++import java.util.List;
++import java.util.concurrent.TimeUnit;
++import java.util.stream.Collectors;
++
+ public class CraftBlock implements Block {
+     private final net.minecraft.world.level.LevelAccessor world;
+     private final BlockPos position;
+@@ -121,7 +113,7 @@ public class CraftBlock implements Block {
+         // Leaf end - SparklyPaper - parallel world ticking - Shutdown handling for async reads
+ 
+         try {
+-            Object result = future.join(); // Block until tick thread completes it
++            Object result = future.get(10, TimeUnit.SECONDS);
+             if (result == null) {
+                 org.bukkit.Bukkit.getLogger().log(java.util.logging.Level.WARNING, "PWT: Buffered async read returned null for " + methodName + " - returning default.");
+                 return defaultValue;
+@@ -261,7 +253,8 @@ public class CraftBlock implements Block {
+     }
+ 
+     private void setData(final byte data, @net.minecraft.world.level.block.Block.UpdateFlags int flags) {
+-        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled && world instanceof ServerLevel serverWorld) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(serverWorld, position, "Cannot modify world asynchronously"); // Leaf - SparklyPaper - parallel world ticking
++        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled && world instanceof ServerLevel serverWorld)
++            ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(serverWorld, position, "Cannot modify world asynchronously"); // Leaf - SparklyPaper - parallel world ticking
+         this.world.setBlock(this.position, CraftMagicNumbers.getBlock(this.getType(), data), flags);
+     }
+ 
+@@ -305,7 +298,8 @@ public class CraftBlock implements Block {
+     }
+ 
+     public static boolean setBlockState(LevelAccessor world, BlockPos pos, net.minecraft.world.level.block.state.BlockState oldState, net.minecraft.world.level.block.state.BlockState newState, boolean applyPhysics) {
+-        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled && world instanceof ServerLevel serverWorld) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(serverWorld, pos, "Cannot modify world asynchronously"); // Leaf - SparklyPaper - parallel world ticking
++        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled && world instanceof ServerLevel serverWorld)
++            ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(serverWorld, pos, "Cannot modify world asynchronously"); // Leaf - SparklyPaper - parallel world ticking
+         // SPIGOT-611: need to do this to prevent glitchiness. Easier to handle this here (like /setblock) than to fix weirdness in block entity cleanup
+         if (oldState.hasBlockEntity() && newState.getBlock() != oldState.getBlock()) { // SPIGOT-3725 remove old block entity if block changes
+             // SPIGOT-4612: faster - just clear tile
+@@ -320,7 +314,7 @@ public class CraftBlock implements Block {
+             return world.setBlock(pos, newState, net.minecraft.world.level.block.Block.UPDATE_ALL);
+         } else {
+             boolean success = world.setBlock(pos, newState,
+-                    net.minecraft.world.level.block.Block.UPDATE_CLIENTS |
++                net.minecraft.world.level.block.Block.UPDATE_CLIENTS |
+                     net.minecraft.world.level.block.Block.UPDATE_KNOWN_SHAPE |
+                     net.minecraft.world.level.block.Block.UPDATE_SKIP_ON_PLACE);
+             if (success && world instanceof net.minecraft.world.level.Level) {
+@@ -527,7 +521,7 @@ public class CraftBlock implements Block {
+                     return Biome.PLAINS; // Default biome on error
+                 }
+             }
+-        }  else {
++        } else {
+             return this.getWorld().getBiome(this.getX(), this.getY(), this.getZ());
+         }
+         // Leaf end - SparklyPaper - parallel world ticking
+@@ -566,7 +560,8 @@ public class CraftBlock implements Block {
+ 
+     @Override
+     public void setBiome(Biome bio) {
+-        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled && world instanceof ServerLevel serverWorld) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(serverWorld, position, "Cannot modify world asynchronously"); // Leaf - SparklyPaper - parallel world ticking
++        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled && world instanceof ServerLevel serverWorld)
++            ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(serverWorld, position, "Cannot modify world asynchronously"); // Leaf - SparklyPaper - parallel world ticking
+         this.getWorld().setBiome(this.getX(), this.getY(), this.getZ(), bio);
+     }
+ 
+@@ -715,14 +710,17 @@ public class CraftBlock implements Block {
+     public boolean isBuildable() {
+         return this.getNMS().isSolid(); // This is in fact isSolid, despite the fact that isSolid below returns blocksMotion
+     }
++
+     @Override
+     public boolean isBurnable() {
+         return this.getNMS().ignitedByLava();
+     }
++
+     @Override
+     public boolean isReplaceable() {
+         return this.getNMS().canBeReplaced();
+     }
++
+     @Override
+     public boolean isSolid() {
+         return this.getNMS().blocksMotion();

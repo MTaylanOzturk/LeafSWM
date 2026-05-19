@@ -1,0 +1,903 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MahmutTaylanOzturk <ozturkmahmuttaylan@gmail.com>
+Date: Thu, 14 May 2026 20:24:59 +0300
+Subject: [PATCH] Refactor ChunkHolderManager and related classes for improved
+ readability and consistency
+
+
+diff --git a/ca/spottedleaf/moonrise/paper/PaperHooks.java b/ca/spottedleaf/moonrise/paper/PaperHooks.java
+index 31e34721f48a5d88379f50104abcf0fc63ebd194..bc6924a76b5a813fc37ab4df84fe3dd9a4682309 100644
+--- a/ca/spottedleaf/moonrise/paper/PaperHooks.java
++++ b/ca/spottedleaf/moonrise/paper/PaperHooks.java
+@@ -224,6 +224,7 @@ public final class PaperHooks extends BaseChunkSystemHooks implements PlatformHo
+ 
+     @Override
+     public boolean forceNoSave(final ChunkAccess chunk) {
++        if(chunk instanceof LevelChunk levelChunk && levelChunk.level instanceof com.infernalsuite.asp.level.SlimeLevelInstance) return true; //ASP - prevent normal saving
+         return chunk instanceof LevelChunk levelChunk && levelChunk.mustNotSave;
+     }
+ 
+@@ -308,4 +309,4 @@ public final class PaperHooks extends BaseChunkSystemHooks implements PlatformHo
+     public boolean addTicketForEnderPearls(final ServerLevel world) {
+         return !world.paperConfig().misc.legacyEnderPearlBehavior;
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+index a48c84b53aac1d79567a276165d0ff3143bc667f..86e45eef5f8cba3fd57311c86438a08353c46c34 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+@@ -19,54 +19,34 @@ import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.task.ChunkProgres
+ import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.task.GenericDataLoadTask;
+ import ca.spottedleaf.moonrise.patches.chunk_system.ticket.ChunkSystemTicket;
+ import ca.spottedleaf.moonrise.patches.chunk_system.ticket.ChunkSystemTicketType;
+-import ca.spottedleaf.moonrise.patches.chunk_system.util.ChunkSystemSortedArraySet;
+ import ca.spottedleaf.moonrise.patches.chunk_system.util.stream.TicketSet;
+ import com.google.gson.JsonArray;
+ import com.google.gson.JsonObject;
+ import com.mojang.logging.LogUtils;
+-import it.unimi.dsi.fastutil.longs.Long2ByteLinkedOpenHashMap;
+-import it.unimi.dsi.fastutil.longs.Long2ByteMap;
+-import it.unimi.dsi.fastutil.longs.Long2IntMap;
+-import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+-import it.unimi.dsi.fastutil.longs.LongArrayList;
+-import it.unimi.dsi.fastutil.longs.LongIterator;
++import it.unimi.dsi.fastutil.longs.*;
+ import it.unimi.dsi.fastutil.objects.ObjectRBTreeSet;
+ import net.minecraft.nbt.CompoundTag;
+-import net.minecraft.server.level.ChunkHolder;
+-import net.minecraft.server.level.ChunkLevel;
+-import net.minecraft.server.level.FullChunkStatus;
+-import net.minecraft.server.level.ServerLevel;
+-import net.minecraft.server.level.Ticket;
+-import net.minecraft.server.level.TicketType;
+-import net.minecraft.util.SortedArraySet;
++import net.minecraft.server.level.*;
+ import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.chunk.LevelChunk;
+ import net.minecraft.world.level.chunk.status.ChunkStatus;
+ import org.slf4j.Logger;
++
+ import java.io.IOException;
+ import java.text.DecimalFormat;
+-import java.util.ArrayDeque;
+-import java.util.ArrayList;
+-import java.util.Collection;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Objects;
+-import java.util.PrimitiveIterator;
++import java.util.*;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.TimeUnit;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicReference;
+ import java.util.concurrent.locks.LockSupport;
+-import java.util.function.Predicate;
+ 
+ public final class ChunkHolderManager {
+ 
+     private static final Logger LOGGER = LogUtils.getClassLogger();
+ 
+-    public static final int FULL_LOADED_TICKET_LEVEL    = ChunkLevel.FULL_CHUNK_LEVEL;
+-    public static final int BLOCK_TICKING_TICKET_LEVEL  = ChunkLevel.BLOCK_TICKING_LEVEL;
++    public static final int FULL_LOADED_TICKET_LEVEL = ChunkLevel.FULL_CHUNK_LEVEL;
++    public static final int BLOCK_TICKING_TICKET_LEVEL = ChunkLevel.BLOCK_TICKING_LEVEL;
+     public static final int ENTITY_TICKING_TICKET_LEVEL = ChunkLevel.ENTITY_TICKING_LEVEL;
+     public static final int MAX_TICKET_LEVEL = ChunkLevel.MAX_LEVEL; // inclusive
+ 
+@@ -115,7 +95,7 @@ public final class ChunkHolderManager {
+         this.world = world;
+         this.taskScheduler = taskScheduler;
+         this.ticketLockArea = new ReentrantAreaLock(taskScheduler.getChunkSystemLockShift());
+-        this.unloadQueue = new ChunkUnloadQueue(((ChunkSystemServerLevel)world).moonrise$getRegionChunkShift());
++        this.unloadQueue = new ChunkUnloadQueue(((ChunkSystemServerLevel) world).moonrise$getRegionChunkShift());
+         this.chunkHoldersNoSync = new org.dreeam.leaf.world.ChunkCache<>(world.getChunkSource().mainThread); // Leaf - thread unsafe chunk map
+     }
+ 
+@@ -126,10 +106,10 @@ public final class ChunkHolderManager {
+         final List<NewChunkHolder> changedFullStatus = new ArrayList<>();
+         final boolean ret;
+         final ReentrantAreaLock.Node ticketLock = this.ticketLockArea.lock(
+-                            ((chunkX >> ticketShift) - 1) << ticketShift,
+-                            ((chunkZ >> ticketShift) - 1) << ticketShift,
+-                            (((chunkX >> ticketShift) + 1) << ticketShift) | ticketMask,
+-                            (((chunkZ >> ticketShift) + 1) << ticketShift) | ticketMask
++            ((chunkX >> ticketShift) - 1) << ticketShift,
++            ((chunkZ >> ticketShift) - 1) << ticketShift,
++            (((chunkX >> ticketShift) + 1) << ticketShift) | ticketMask,
++            (((chunkZ >> ticketShift) + 1) << ticketShift) | ticketMask
+         );
+         try {
+             ret = this.processTicketUpdatesNoLock(chunkX >> ticketShift, chunkZ >> ticketShift, scheduledTasks, changedFullStatus);
+@@ -149,13 +129,13 @@ public final class ChunkHolderManager {
+     private boolean processTicketUpdatesNoLock(final int sectionX, final int sectionZ, final List<ChunkProgressionTask> scheduledTasks,
+                                                final List<NewChunkHolder> changedFullStatus) {
+         return this.ticketLevelPropagator.performUpdate(
+-                sectionX, sectionZ, this.taskScheduler.schedulingLockArea, scheduledTasks, changedFullStatus
++            sectionX, sectionZ, this.taskScheduler.schedulingLockArea, scheduledTasks, changedFullStatus
+         );
+     }
+ 
+     public List<ChunkHolder> getOldChunkHolders() {
+         final List<ChunkHolder> ret = new ArrayList<>(this.chunkHolders.size() + 1);
+-        for (final Iterator<NewChunkHolder> iterator = this.chunkHolders.valueIterator(); iterator.hasNext();) {
++        for (final Iterator<NewChunkHolder> iterator = this.chunkHolders.valueIterator(); iterator.hasNext(); ) {
+             ret.add(iterator.next().vanillaChunkHolder);
+         }
+         return ret;
+@@ -163,7 +143,7 @@ public final class ChunkHolderManager {
+ 
+     public List<NewChunkHolder> getChunkHolders() {
+         final List<NewChunkHolder> ret = new ArrayList<>(this.chunkHolders.size() + 1);
+-        for (final Iterator<NewChunkHolder> iterator = this.chunkHolders.valueIterator(); iterator.hasNext();) {
++        for (final Iterator<NewChunkHolder> iterator = this.chunkHolders.valueIterator(); iterator.hasNext(); ) {
+             ret.add(iterator.next());
+         }
+         return ret;
+@@ -193,7 +173,9 @@ public final class ChunkHolderManager {
+         };
+     }
+ 
+-    public void close(final boolean save, final boolean halt) {
++    public void close(boolean save, boolean halt) { // ASP
++        if (this.world instanceof com.infernalsuite.asp.level.SlimeLevelInstance) save = false; // ASP
++
+         TickThread.ensureTickThread("Closing world off-main");
+         if (halt) {
+             LOGGER.info("Waiting 60s for chunk system to halt for world '" + WorldUtil.getWorldName(this.world) + "'");
+@@ -243,7 +225,7 @@ public final class ChunkHolderManager {
+         final long currentTick = this.currentTick;
+         final long maxSaveTime = currentTick - Math.max(1L, PlatformHooks.get().configAutoSaveInterval(this.world));
+         final int maxToSave = PlatformHooks.get().configMaxAutoSavePerTick(this.world);
+-        for (int autoSaved = 0; autoSaved < maxToSave && !this.autoSaveQueue.isEmpty();) {
++        for (int autoSaved = 0; autoSaved < maxToSave && !this.autoSaveQueue.isEmpty(); ) {
+             final NewChunkHolder holder = this.autoSaveQueue.first();
+ 
+             if (holder.lastAutoSave > maxSaveTime) {
+@@ -334,9 +316,9 @@ public final class ChunkHolderManager {
+                 if ((currTime - lastLog) > TimeUnit.SECONDS.toNanos(10L)) {
+                     lastLog = currTime;
+                     LOGGER.info(
+-                            "Saved " + savedChunk + " block chunks, " + savedEntity + " entity chunks, " + savedPoi
+-                                    + " poi chunks in world '" + WorldUtil.getWorldName(this.world) + "', progress: "
+-                                    + format.format((double)(i+1)/(double)len * 100.0)
++                        "Saved " + savedChunk + " block chunks, " + savedEntity + " entity chunks, " + savedPoi
++                            + " poi chunks in world '" + WorldUtil.getWorldName(this.world) + "', progress: "
++                            + format.format((double) (i + 1) / (double) len * 100.0)
+                     );
+                 }
+             }
+@@ -351,9 +333,9 @@ public final class ChunkHolderManager {
+         }
+         if (logProgress) {
+             LOGGER.info(
+-                    "Saved " + savedChunk + " block chunks, " + savedEntity + " entity chunks, " + savedPoi
+-                            + " poi chunks in world '" + WorldUtil.getWorldName(this.world) + "' in "
+-                            + format.format(1.0E-9 * (System.nanoTime() - start)) + "s"
++                "Saved " + savedChunk + " block chunks, " + savedEntity + " entity chunks, " + savedPoi
++                    + " poi chunks in world '" + WorldUtil.getWorldName(this.world) + "' in "
++                    + format.format(1.0E-9 * (System.nanoTime() - start)) + "s"
+             );
+         }
+     }
+@@ -362,10 +344,10 @@ public final class ChunkHolderManager {
+         @Override
+         protected void processLevelUpdates(final Long2ByteLinkedOpenHashMap updates) {
+             // first the necessary chunkholders must be created, so just update the ticket levels
+-            for (final Iterator<Long2ByteMap.Entry> iterator = updates.long2ByteEntrySet().fastIterator(); iterator.hasNext();) {
++            for (final Iterator<Long2ByteMap.Entry> iterator = updates.long2ByteEntrySet().fastIterator(); iterator.hasNext(); ) {
+                 final Long2ByteMap.Entry entry = iterator.next();
+                 final long key = entry.getLongKey();
+-                final int newLevel = convertBetweenTicketLevels((int)entry.getByteValue());
++                final int newLevel = convertBetweenTicketLevels((int) entry.getByteValue());
+ 
+                 NewChunkHolder current = ChunkHolderManager.this.chunkHolders.get(key);
+                 if (current == null && newLevel > MAX_TICKET_LEVEL) {
+@@ -399,7 +381,7 @@ public final class ChunkHolderManager {
+             final List<ChunkProgressionTask> prev = CURRENT_TICKET_UPDATE_SCHEDULING.get();
+             CURRENT_TICKET_UPDATE_SCHEDULING.set(scheduledTasks);
+             try {
+-                for (final LongIterator iterator = updates.keySet().iterator(); iterator.hasNext();) {
++                for (final LongIterator iterator = updates.keySet().iterator(); iterator.hasNext(); ) {
+                     final long key = iterator.nextLong();
+                     final NewChunkHolder current = ChunkHolderManager.this.chunkHolders.get(key);
+ 
+@@ -472,7 +454,7 @@ public final class ChunkHolderManager {
+         final Long2ObjectOpenHashMap<Collection<Ticket>> ret = new Long2ObjectOpenHashMap<>();
+         final Long2ObjectOpenHashMap<LongArrayList> sections = new Long2ObjectOpenHashMap<>();
+         final int sectionShift = this.taskScheduler.getChunkSystemLockShift();
+-        for (final PrimitiveIterator.OfLong iterator = this.tickets.keyIterator(); iterator.hasNext();) {
++        for (final PrimitiveIterator.OfLong iterator = this.tickets.keyIterator(); iterator.hasNext(); ) {
+             final long coord = iterator.nextLong();
+             sections.computeIfAbsent(
+                 CoordinateUtils.getChunkKey(
+@@ -486,7 +468,7 @@ public final class ChunkHolderManager {
+         }
+ 
+         for (final Iterator<Long2ObjectMap.Entry<LongArrayList>> iterator = sections.long2ObjectEntrySet().fastIterator();
+-             iterator.hasNext();) {
++             iterator.hasNext(); ) {
+             final Long2ObjectMap.Entry<LongArrayList> entry = iterator.next();
+             final long sectionKey = entry.getLongKey();
+             final LongArrayList coordinates = entry.getValue();
+@@ -496,7 +478,7 @@ public final class ChunkHolderManager {
+                 CoordinateUtils.getChunkZ(sectionKey) << sectionShift
+             );
+             try {
+-                for (final LongIterator iterator2 = coordinates.iterator(); iterator2.hasNext();) {
++                for (final LongIterator iterator2 = coordinates.iterator(); iterator2.hasNext(); ) {
+                     final long coord = iterator2.nextLong();
+                     final TicketSet tickets = this.tickets.get(coord);
+                     if (tickets == null) {
+@@ -528,7 +510,7 @@ public final class ChunkHolderManager {
+             ret = com.google.common.collect.ImmutableList.builder();
+             for (Ticket<?> ticket : tickets) {
+                 if (ticket.getType() == TicketType.PLUGIN_TICKET) {
+-                    ret.add((org.bukkit.plugin.Plugin)ticket.moonrise$getIdentifier());
++                    ret.add((org.bukkit.plugin.Plugin) ticket.moonrise$getIdentifier());
+                 }
+             }
+         } finally {
+@@ -564,7 +546,7 @@ public final class ChunkHolderManager {
+     private void addExpireCount(final int chunkX, final int chunkZ) {
+         final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+ 
+-        final int sectionShift = ((ChunkSystemServerLevel)this.world).moonrise$getRegionChunkShift();
++        final int sectionShift = ((ChunkSystemServerLevel) this.world).moonrise$getRegionChunkShift();
+         final long sectionKey = CoordinateUtils.getChunkKey(
+             chunkX >> sectionShift,
+             chunkZ >> sectionShift
+@@ -578,7 +560,7 @@ public final class ChunkHolderManager {
+     private void removeExpireCount(final int chunkX, final int chunkZ) {
+         final long chunkKey = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+ 
+-        final int sectionShift = ((ChunkSystemServerLevel)this.world).moonrise$getRegionChunkShift();
++        final int sectionShift = ((ChunkSystemServerLevel) this.world).moonrise$getRegionChunkShift();
+         final long sectionKey = CoordinateUtils.getChunkKey(
+             chunkX >> sectionShift,
+             chunkZ >> sectionShift
+@@ -610,7 +592,7 @@ public final class ChunkHolderManager {
+         final int chunkX = CoordinateUtils.getChunkX(chunk);
+         final int chunkZ = CoordinateUtils.getChunkZ(chunk);
+         final Ticket ticket = new Ticket(type, level, removeDelay);
+-        ((ChunkSystemTicket<T>)(Object)ticket).moonrise$setIdentifier(identifier);
++        ((ChunkSystemTicket<T>) (Object) ticket).moonrise$setIdentifier(identifier);
+ 
+         final ReentrantAreaLock.Node ticketLock = lock ? this.ticketLockArea.lock(chunkX, chunkZ) : null;
+         try {
+@@ -623,7 +605,7 @@ public final class ChunkHolderManager {
+             final int levelAfter = getTicketLevelAt(ticketsAtChunk);
+ 
+             if (current != ticket) {
+-                final long oldRemoveDelay = ((ChunkSystemTicket<T>)(Object)current).moonrise$getRemoveDelay();
++                final long oldRemoveDelay = ((ChunkSystemTicket<T>) (Object) current).moonrise$getRemoveDelay();
+                 if (removeDelay != oldRemoveDelay) {
+                     if (oldRemoveDelay != NO_TIMEOUT_MARKER && removeDelay == NO_TIMEOUT_MARKER) {
+                         this.removeExpireCount(chunkX, chunkZ);
+@@ -652,7 +634,7 @@ public final class ChunkHolderManager {
+     }
+ 
+     private void addTicketCounter(final TicketType type, final long pos) {
+-        for (final long counterType : ((ChunkSystemTicketType<?>)(Object)type).moonrise$getCounterTypes()) {
++        for (final long counterType : ((ChunkSystemTicketType<?>) (Object) type).moonrise$getCounterTypes()) {
+             this.ticketCounters.computeIfAbsent(counterType, (final long counterId) -> {
+                 return new ConcurrentLong2LongChainedHashTable();
+             }).addTo(pos, 1L, 1L);
+@@ -660,7 +642,7 @@ public final class ChunkHolderManager {
+     }
+ 
+     private void removeTicketCounter(final TicketType type, final long pos) {
+-        for (final long counterType : ((ChunkSystemTicketType<?>)(Object)type).moonrise$getCounterTypes()) {
++        for (final long counterType : ((ChunkSystemTicketType<?>) (Object) type).moonrise$getCounterTypes()) {
+             this.ticketCounters.get(counterType).decFrom(pos, 1L, 0L);
+         }
+     }
+@@ -689,7 +671,7 @@ public final class ChunkHolderManager {
+         final int chunkX = CoordinateUtils.getChunkX(chunk);
+         final int chunkZ = CoordinateUtils.getChunkZ(chunk);
+         final Ticket probe = new Ticket(type, level, 0L);
+-        ((ChunkSystemTicket<T>)(Object)probe).moonrise$setIdentifier(identifier);
++        ((ChunkSystemTicket<T>) (Object) probe).moonrise$setIdentifier(identifier);
+ 
+         final ReentrantAreaLock.Node ticketLock = lock ? this.ticketLockArea.lock(chunkX, chunkZ) : null;
+         try {
+@@ -717,7 +699,7 @@ public final class ChunkHolderManager {
+                 }
+             }
+ 
+-            final long removeDelay = ((ChunkSystemTicket<T>)(Object)ticket).moonrise$getRemoveDelay();
++            final long removeDelay = ((ChunkSystemTicket<T>) (Object) ticket).moonrise$getRemoveDelay();
+             if (removeDelay != NO_TIMEOUT_MARKER) {
+                 this.removeExpireCount(chunkX, chunkZ);
+             }
+@@ -766,21 +748,21 @@ public final class ChunkHolderManager {
+ 
+         final Long2ObjectOpenHashMap<LongArrayList> sections = new Long2ObjectOpenHashMap<>();
+         final int sectionShift = this.taskScheduler.getChunkSystemLockShift();
+-        for (final PrimitiveIterator.OfLong iterator = this.tickets.keyIterator(); iterator.hasNext();) {
++        for (final PrimitiveIterator.OfLong iterator = this.tickets.keyIterator(); iterator.hasNext(); ) {
+             final long coord = iterator.nextLong();
+             sections.computeIfAbsent(
+-                    CoordinateUtils.getChunkKey(
+-                            CoordinateUtils.getChunkX(coord) >> sectionShift,
+-                            CoordinateUtils.getChunkZ(coord) >> sectionShift
+-                    ),
+-                    (final long keyInMap) -> {
+-                        return new LongArrayList();
+-                    }
++                CoordinateUtils.getChunkKey(
++                    CoordinateUtils.getChunkX(coord) >> sectionShift,
++                    CoordinateUtils.getChunkZ(coord) >> sectionShift
++                ),
++                (final long keyInMap) -> {
++                    return new LongArrayList();
++                }
+             ).add(coord);
+         }
+ 
+         for (final Iterator<Long2ObjectMap.Entry<LongArrayList>> iterator = sections.long2ObjectEntrySet().fastIterator();
+-             iterator.hasNext();) {
++             iterator.hasNext(); ) {
+             final Long2ObjectMap.Entry<LongArrayList> entry = iterator.next();
+             final long sectionKey = entry.getLongKey();
+             final LongArrayList coordinates = entry.getValue();
+@@ -790,7 +772,7 @@ public final class ChunkHolderManager {
+                 CoordinateUtils.getChunkZ(sectionKey) << sectionShift
+             );
+             try {
+-                for (final LongIterator iterator2 = coordinates.iterator(); iterator2.hasNext();) {
++                for (final LongIterator iterator2 = coordinates.iterator(); iterator2.hasNext(); ) {
+                     final long coord = iterator2.nextLong();
+                     this.removeTicketAtLevel(ticketType, coord, ticketLevel, ticketIdentifier, false);
+                 }
+@@ -802,26 +784,26 @@ public final class ChunkHolderManager {
+ 
+     // ret true if expired
+     public static boolean tickTicket(final Ticket ticket) {
+-        long removeDelay = ((ChunkSystemTicket<?>)(Object)ticket).moonrise$getRemoveDelay();
++        long removeDelay = ((ChunkSystemTicket<?>) (Object) ticket).moonrise$getRemoveDelay();
+         if (removeDelay == NO_TIMEOUT_MARKER) {
+             return false;
+         }
+         --removeDelay;
+-        ((ChunkSystemTicket<?>)(Object)ticket).moonrise$setRemoveDelay(removeDelay);
++        ((ChunkSystemTicket<?>) (Object) ticket).moonrise$setRemoveDelay(removeDelay);
+         return removeDelay <= 0L;
+     }
+ 
+     public void tick() {
+         ++this.currentTick;
+ 
+-        final int sectionShift = ((ChunkSystemServerLevel)this.world).moonrise$getRegionChunkShift();
++        final int sectionShift = ((ChunkSystemServerLevel) this.world).moonrise$getRegionChunkShift();
+ 
+         final List<ChunkProgressionTask> scheduledTasks = new ArrayList<>();
+         final List<NewChunkHolder> changedFullStatus = new ArrayList<>();
+ 
+         Ticket[] removedList = new Ticket[4];
+ 
+-        for (final PrimitiveIterator.OfLong iterator = this.sectionToChunkToExpireCount.keyIterator(); iterator.hasNext();) {
++        for (final PrimitiveIterator.OfLong iterator = this.sectionToChunkToExpireCount.keyIterator(); iterator.hasNext(); ) {
+             final long sectionKey = iterator.nextLong();
+ 
+             if (!this.sectionToChunkToExpireCount.containsKey(sectionKey)) {
+@@ -848,7 +830,7 @@ public final class ChunkHolderManager {
+                     continue;
+                 }
+ 
+-                for (final Iterator<Long2IntMap.Entry> iterator1 = chunkToExpireCount.long2IntEntrySet().fastIterator(); iterator1.hasNext();) {
++                for (final Iterator<Long2IntMap.Entry> iterator1 = chunkToExpireCount.long2IntEntrySet().fastIterator(); iterator1.hasNext(); ) {
+                     final Long2IntMap.Entry entry = iterator1.next();
+ 
+                     final long chunkKey = entry.getLongKey();
+@@ -1210,7 +1192,7 @@ public final class ChunkHolderManager {
+ 
+         final int toUnloadCount = Math.max(
+             PlatformHooks.get().configMinChunkUnloadCount(this.world),
+-            (int)Math.round(unloadCountTentative * Math.clamp(PlatformHooks.get().configMinChunkUnloadFraction(this.world), 0.0, 1.0))
++            (int) Math.round(unloadCountTentative * Math.clamp(PlatformHooks.get().configMinChunkUnloadFraction(this.world), 0.0, 1.0))
+         );
+         int processedCount = 0;
+ 
+@@ -1240,7 +1222,7 @@ public final class ChunkHolderManager {
+                     if ((sectionCount + processedCount) <= toUnloadCount) {
+                         // we can just drain the entire section
+ 
+-                        for (final LongIterator iterator = section.chunks.iterator(); iterator.hasNext();) {
++                        for (final LongIterator iterator = section.chunks.iterator(); iterator.hasNext(); ) {
+                             final NewChunkHolder holder = this.chunkHolders.get(iterator.nextLong());
+                             if (holder == null) {
+                                 throw new IllegalStateException();
+@@ -1335,7 +1317,7 @@ public final class ChunkHolderManager {
+         ADD, REMOVE, ADD_IF_REMOVED, ADD_AND_REMOVE
+     }
+ 
+-    public static record TicketOperation<T, V> (
++    public static record TicketOperation<T, V>(
+         TicketOperationType op, long chunkCoord,
+         TicketType ticketType, int ticketLevel, T identifier,
+         TicketType ticketType2, int ticketLevel2, V identifier2
+@@ -1558,7 +1540,7 @@ public final class ChunkHolderManager {
+         ret.add("tickets", allTicketsJson);
+ 
+         for (final Iterator<ConcurrentLong2ReferenceChainedHashTable.TableEntry<TicketSet>> iterator = this.tickets.entryIterator();
+-            iterator.hasNext();) {
++             iterator.hasNext(); ) {
+             final ConcurrentLong2ReferenceChainedHashTable.TableEntry<TicketSet> coordinateTickets = iterator.next();
+             final long coordinate = coordinateTickets.getKey();
+             final TicketSet tickets = coordinateTickets.getValue();
+@@ -1585,8 +1567,8 @@ public final class ChunkHolderManager {
+ 
+                 ticketSerialized.addProperty("type", ticket.getType().toString());
+                 ticketSerialized.addProperty("level", Integer.valueOf(ticket.getTicketLevel()));
+-                ticketSerialized.addProperty("identifier", Objects.toString(((ChunkSystemTicket<?>)(Object)ticket).moonrise$getIdentifier()));
+-                ticketSerialized.addProperty("remove_tick", Long.valueOf(((ChunkSystemTicket<?>)(Object)ticket).moonrise$getRemoveDelay()));
++                ticketSerialized.addProperty("identifier", Objects.toString(((ChunkSystemTicket<?>) (Object) ticket).moonrise$getIdentifier()));
++                ticketSerialized.addProperty("remove_tick", Long.valueOf(((ChunkSystemTicket<?>) (Object) ticket).moonrise$getRemoveDelay()));
+             }
+         }
+ 
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
+index f950472f371af3581af82c5bcdd7a800191cf051..0fb126b14486c97022f90e9504d0d4f4fd8edb57 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
+@@ -12,10 +12,10 @@ import ca.spottedleaf.moonrise.common.misc.LazyRunnable;
+ import ca.spottedleaf.moonrise.common.util.CoordinateUtils;
+ import ca.spottedleaf.moonrise.common.util.TickThread;
+ import ca.spottedleaf.moonrise.common.util.WorldUtil;
+-import ca.spottedleaf.moonrise.patches.chunk_system.level.chunk.ChunkData;
+ import ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO;
+ import ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemLevel;
+ import ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel;
++import ca.spottedleaf.moonrise.patches.chunk_system.level.chunk.ChunkData;
+ import ca.spottedleaf.moonrise.patches.chunk_system.level.chunk.ChunkSystemChunkHolder;
+ import ca.spottedleaf.moonrise.patches.chunk_system.level.chunk.ChunkSystemChunkStatus;
+ import ca.spottedleaf.moonrise.patches.chunk_system.level.entity.ChunkEntitySlices;
+@@ -24,11 +24,7 @@ import ca.spottedleaf.moonrise.patches.chunk_system.level.poi.PoiChunk;
+ import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.task.ChunkLoadTask;
+ import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.task.ChunkProgressionTask;
+ import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.task.GenericDataLoadTask;
+-import com.google.gson.JsonArray;
+-import com.google.gson.JsonElement;
+-import com.google.gson.JsonNull;
+-import com.google.gson.JsonObject;
+-import com.google.gson.JsonPrimitive;
++import com.google.gson.*;
+ import it.unimi.dsi.fastutil.objects.Reference2ObjectLinkedOpenHashMap;
+ import it.unimi.dsi.fastutil.objects.Reference2ObjectMap;
+ import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
+@@ -47,12 +43,9 @@ import net.minecraft.world.level.chunk.status.ChunkStatus;
+ import net.minecraft.world.level.chunk.storage.SerializableChunkData;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
++
+ import java.lang.invoke.VarHandle;
+-import java.util.ArrayList;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Objects;
++import java.util.*;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.function.Consumer;
+ 
+@@ -98,7 +91,7 @@ public final class NewChunkHolder {
+ 
+                 ret.setTransient(transientChunk);
+ 
+-                ((ChunkSystemServerLevel)this.world).moonrise$getEntityLookup().entitySectionLoad(this.chunkX, this.chunkZ, ret);
++                ((ChunkSystemServerLevel) this.world).moonrise$getEntityLookup().entitySectionLoad(this.chunkX, this.chunkZ, ret);
+             } else {
+                 // transientChunk = false here
+                 ret = this.entityChunk;
+@@ -121,7 +114,7 @@ public final class NewChunkHolder {
+ 
+                 final List<Entity> entities = ChunkEntitySlices.readEntities(this.world, pos, entityChunk);
+ 
+-                ((ChunkSystemServerLevel)this.world).moonrise$getEntityLookup().addEntityChunkEntities(entities, pos);
++                ((ChunkSystemServerLevel) this.world).moonrise$getEntityLookup().addEntityChunkEntities(entities, pos);
+             }
+         }
+ 
+@@ -222,7 +215,7 @@ public final class NewChunkHolder {
+             throw new IllegalStateException("Must hold scheduling lock");
+         }
+ 
+-        final GenericDataLoadTaskCallback ret = new EntityDataLoadTaskCallback((Consumer)consumer, this);
++        final GenericDataLoadTaskCallback ret = new EntityDataLoadTaskCallback((Consumer) consumer, this);
+ 
+         if (this.entityDataLoadTask == null) {
+             this.entityDataLoadTask = new ChunkLoadTask.EntityDataLoadTask(
+@@ -342,7 +335,7 @@ public final class NewChunkHolder {
+             throw new IllegalStateException("Must hold scheduling lock");
+         }
+ 
+-        final GenericDataLoadTaskCallback ret = new PoiDataLoadTaskCallback((Consumer)consumer, this);
++        final GenericDataLoadTaskCallback ret = new PoiDataLoadTaskCallback((Consumer) consumer, this);
+ 
+         if (this.poiDataLoadTask == null) {
+             this.poiDataLoadTask = new ChunkLoadTask.PoiDataLoadTask(
+@@ -461,7 +454,10 @@ public final class NewChunkHolder {
+     // This allows lockless access to the chunk and last gen status
+     private static final ChunkStatus[] ALL_STATUSES = ChunkStatus.getStatusList().toArray(new ChunkStatus[0]);
+ 
+-    public static final record ChunkCompletion(ChunkAccess chunk, ChunkStatus genStatus) {};
++    public static final record ChunkCompletion(ChunkAccess chunk, ChunkStatus genStatus) {
++    }
++
++    ;
+     private static final VarHandle CHUNK_COMPLETION_ARRAY_HANDLE = ConcurrentUtil.getArrayHandle(ChunkCompletion[].class);
+     private final ChunkCompletion[] chunkCompletions = new ChunkCompletion[ALL_STATUSES.length];
+ 
+@@ -472,7 +468,7 @@ public final class NewChunkHolder {
+     }
+ 
+     public ChunkAccess getChunkIfPresentUnchecked(final ChunkStatus status) {
+-        final ChunkCompletion completion = (ChunkCompletion)CHUNK_COMPLETION_ARRAY_HANDLE.getVolatile(this.chunkCompletions, status.getIndex());
++        final ChunkCompletion completion = (ChunkCompletion) CHUNK_COMPLETION_ARRAY_HANDLE.getVolatile(this.chunkCompletions, status.getIndex());
+         return completion == null ? null : completion.chunk;
+     }
+ 
+@@ -653,11 +649,11 @@ public final class NewChunkHolder {
+         this.chunkZ = chunkZ;
+         this.scheduler = scheduler;
+         this.vanillaChunkHolder = new ChunkHolder(
+-                new ChunkPos(chunkX, chunkZ), ChunkHolderManager.MAX_TICKET_LEVEL, world,
+-                world.getLightEngine(), null, world.getChunkSource().chunkMap
++            new ChunkPos(chunkX, chunkZ), ChunkHolderManager.MAX_TICKET_LEVEL, world,
++            world.getLightEngine(), null, world.getChunkSource().chunkMap
+         );
+-        ((ChunkSystemChunkHolder)this.vanillaChunkHolder).moonrise$setRealChunkHolder(this);
+-        this.holderData = ((ChunkSystemLevel)this.world).moonrise$requestChunkData(CoordinateUtils.getChunkKey(chunkX, chunkZ));
++        ((ChunkSystemChunkHolder) this.vanillaChunkHolder).moonrise$setRealChunkHolder(this);
++        this.holderData = ((ChunkSystemLevel) this.world).moonrise$requestChunkData(CoordinateUtils.getChunkKey(chunkX, chunkZ));
+     }
+ 
+     public ChunkAccess getCurrentChunk() {
+@@ -754,12 +750,14 @@ public final class NewChunkHolder {
+         return null;
+     }
+ 
+-    /** Unloaded from chunk map */
++    /**
++     * Unloaded from chunk map
++     */
+     private boolean unloaded;
+ 
+     void onUnload() {
+         this.unloaded = true;
+-        ((ChunkSystemLevel)this.world).moonrise$releaseChunkData(CoordinateUtils.getChunkKey(this.chunkX, this.chunkZ));
++        ((ChunkSystemLevel) this.world).moonrise$releaseChunkData(CoordinateUtils.getChunkKey(this.chunkX, this.chunkZ));
+     }
+ 
+     private boolean inUnloadQueue = false;
+@@ -788,7 +786,11 @@ public final class NewChunkHolder {
+         }
+     }
+ 
+-    static final record UnloadState(NewChunkHolder holder, ChunkAccess chunk, ChunkEntitySlices entityChunk, PoiChunk poiChunk) {};
++    static final record UnloadState(NewChunkHolder holder, ChunkAccess chunk, ChunkEntitySlices entityChunk,
++                                    PoiChunk poiChunk) {
++    }
++
++    ;
+ 
+     // note: these are completed with null to indicate that no write occurred
+     // they are also completed with null to indicate a null write occurred
+@@ -796,8 +798,10 @@ public final class NewChunkHolder {
+     private UnloadTask entityDataUnload;
+     private UnloadTask poiDataUnload;
+ 
+-    public static final record UnloadTask(CallbackCompletable<CompoundTag> completable, PrioritisedExecutor.PrioritisedTask task,
+-                                          LazyRunnable toRun) {}
++    public static final record UnloadTask(CallbackCompletable<CompoundTag> completable,
++                                          PrioritisedExecutor.PrioritisedTask task,
++                                          LazyRunnable toRun) {
++    }
+ 
+     public UnloadTask getUnloadTask(final MoonriseRegionFileIO.RegionFileType type) {
+         switch (type) {
+@@ -839,7 +843,7 @@ public final class NewChunkHolder {
+         this.currentChunk = null;
+         this.currentGenStatus = null;
+         for (int i = 0; i < this.chunkCompletions.length; ++i) {
+-            CHUNK_COMPLETION_ARRAY_HANDLE.setRelease(this.chunkCompletions, i, (ChunkCompletion)null);
++            CHUNK_COMPLETION_ARRAY_HANDLE.setRelease(this.chunkCompletions, i, (ChunkCompletion) null);
+         }
+         this.lastChunkCompletion = null;
+         // entity chunk state
+@@ -887,6 +891,12 @@ public final class NewChunkHolder {
+             }
+ 
+             if (chunk instanceof LevelChunk levelChunk) {
++                //ASP start - unloadStage1 sets the entitySlices to null, so we can't get them otherwise unfortunately.
++                //This needs to be above world.unload since world.unload removes block entities
++                if (world instanceof com.infernalsuite.asp.level.SlimeLevelInstance instance) {
++                    instance.unload(levelChunk, entityChunk, poiChunk);
++                }
++                //ASP end
+                 this.world.unload(levelChunk);
+             }
+ 
+@@ -896,7 +906,11 @@ public final class NewChunkHolder {
+         // unload entity data
+         if (entityChunk != null) {
+             final Completable<CompoundTag>[] entityWrite = new Completable[1];
+-            this.saveEntities(entityChunk, true, entityWrite);
++            //ASP start - prevent saving
++            if (!(world instanceof com.infernalsuite.asp.level.SlimeLevelInstance)) {
++                this.saveEntities(entityChunk, true, entityWrite);
++            }
++            //ASP end - prevent saving
+ 
+             if (entityChunk.unload()) {
+                 final ReentrantAreaLock.Node schedulingLock = this.scheduler.schedulingLockArea.lock(this.chunkX, this.chunkZ);
+@@ -907,7 +921,7 @@ public final class NewChunkHolder {
+                     this.scheduler.schedulingLockArea.unlock(schedulingLock);
+                 }
+             } else {
+-                ((ChunkSystemServerLevel)this.world).moonrise$getEntityLookup().entitySectionUnload(this.chunkX, this.chunkZ);
++                ((ChunkSystemServerLevel) this.world).moonrise$getEntityLookup().entitySectionUnload(this.chunkX, this.chunkZ);
+             }
+             // we need to delay the callback until after determining transience, otherwise a potential loader could
+             // set entityChunk before we do
+@@ -922,7 +936,7 @@ public final class NewChunkHolder {
+             }
+ 
+             if (poiChunk.isLoaded()) {
+-                ((ChunkSystemPoiManager)this.world.getPoiManager()).moonrise$onUnload(CoordinateUtils.getChunkKey(this.chunkX, this.chunkZ));
++                ((ChunkSystemPoiManager) this.world.getPoiManager()).moonrise$onUnload(CoordinateUtils.getChunkKey(this.chunkX, this.chunkZ));
+             }
+             this.asyncCompleteUnloadTask(MoonriseRegionFileIO.RegionFileType.POI_DATA, poiWrite[0]);
+         }
+@@ -992,7 +1006,7 @@ public final class NewChunkHolder {
+                 this.requestedGenStatus = null;
+                 this.cancelGenTask();
+             } else {
+-                final ChunkStatus toCancel = ((ChunkSystemChunkStatus)maxGenerationStatusNew).moonrise$getNextStatus();
++                final ChunkStatus toCancel = ((ChunkSystemChunkStatus) maxGenerationStatusNew).moonrise$getNextStatus();
+                 final ChunkStatus currentRequestedStatus = this.requestedGenStatus;
+ 
+                 if (currentRequestedStatus.isOrAfter(toCancel)) {
+@@ -1066,6 +1080,7 @@ public final class NewChunkHolder {
+         // optimised variant of the above by moving some of the ops to compile time
+         return relativeX + (relativeZ * (NEIGHBOUR_RADIUS * 2 + 1)) + (NEIGHBOUR_RADIUS + NEIGHBOUR_RADIUS * ((NEIGHBOUR_RADIUS * 2 + 1)));
+     }
++
+     public final boolean isNeighbourFullLoaded(final int relativeX, final int relativeZ) {
+         return (this.fullNeighbourChunksLoadedBitset & (1L << getFullNeighbourIndex(relativeX, relativeZ))) != 0;
+     }
+@@ -1185,7 +1200,7 @@ public final class NewChunkHolder {
+     }
+ 
+     private void changeEntityChunkStatus(final FullChunkStatus toStatus) {
+-        ((ChunkSystemServerLevel)this.world).moonrise$getEntityLookup().chunkStatusChange(this.chunkX, this.chunkZ, toStatus);
++        ((ChunkSystemServerLevel) this.world).moonrise$getEntityLookup().chunkStatusChange(this.chunkX, this.chunkZ, toStatus);
+     }
+ 
+     private boolean processingFullStatus = false;
+@@ -1207,7 +1222,7 @@ public final class NewChunkHolder {
+ 
+         this.processingFullStatus = true;
+         try {
+-            for (;;) {
++            for (; ; ) {
+                 // check if we have any remaining work to do
+ 
+                 // we do not need to hold the scheduling lock to read pending, as changes to pending
+@@ -1236,7 +1251,7 @@ public final class NewChunkHolder {
+ 
+                 // chunks cannot downgrade state while status is pending a change
+                 // note: currentChunk must be LevelChunk, as current != pending which means that at least one is not ACCESSIBLE
+-                final LevelChunk chunk = (LevelChunk)this.currentChunk;
++                final LevelChunk chunk = (LevelChunk) this.currentChunk;
+ 
+                 // Note: we assume that only load/unload contain plugin logic
+                 // plugin logic is anything stupid enough to possibly change the chunk status while it is already
+@@ -1338,7 +1353,7 @@ public final class NewChunkHolder {
+         // need to tell future statuses to complete if cancelled
+         do {
+             this.completeStatusConsumers0(status, chunk);
+-        } while (chunk == null && status != (status = ((ChunkSystemChunkStatus)status).moonrise$getNextStatus()));
++        } while (chunk == null && status != (status = ((ChunkSystemChunkStatus) status).moonrise$getNextStatus()));
+     }
+ 
+     private void completeStatusConsumers0(final ChunkStatus status, final ChunkAccess chunk) {
+@@ -1413,7 +1428,7 @@ public final class NewChunkHolder {
+             if (requestedGenStatus != null) {
+                 // it looks like it has been requested, so we must reschedule
+                 if (!this.neighboursWaitingForUs.isEmpty()) {
+-                    for (final Iterator<Reference2ObjectMap.Entry<NewChunkHolder, ChunkStatus>> iterator = this.neighboursWaitingForUs.reference2ObjectEntrySet().fastIterator(); iterator.hasNext();) {
++                    for (final Iterator<Reference2ObjectMap.Entry<NewChunkHolder, ChunkStatus>> iterator = this.neighboursWaitingForUs.reference2ObjectEntrySet().fastIterator(); iterator.hasNext(); ) {
+                         final Reference2ObjectMap.Entry<NewChunkHolder, ChunkStatus> entry = iterator.next();
+ 
+                         final NewChunkHolder chunkHolder = entry.getKey();
+@@ -1470,7 +1485,7 @@ public final class NewChunkHolder {
+         List<NewChunkHolder> needsScheduling = null;
+         boolean recalculatePriority = false;
+         for (final Iterator<Reference2ObjectMap.Entry<NewChunkHolder, ChunkStatus>> iterator
+-             = this.neighboursWaitingForUs.reference2ObjectEntrySet().fastIterator(); iterator.hasNext();) {
++             = this.neighboursWaitingForUs.reference2ObjectEntrySet().fastIterator(); iterator.hasNext(); ) {
+             final Reference2ObjectMap.Entry<NewChunkHolder, ChunkStatus> entry = iterator.next();
+             final NewChunkHolder neighbour = entry.getKey();
+             final ChunkStatus requiredStatus = entry.getValue();
+@@ -1640,7 +1655,8 @@ public final class NewChunkHolder {
+ 
+     public long lastAutoSave;
+ 
+-    public static final record SaveStat(boolean savedChunk, boolean savedEntityChunk, boolean savedPoiChunk) {}
++    public static final record SaveStat(boolean savedChunk, boolean savedEntityChunk, boolean savedPoiChunk) {
++    }
+ 
+     private static final MoonriseRegionFileIO.RegionFileType[] REGION_FILE_TYPES = MoonriseRegionFileIO.RegionFileType.values();
+ 
+@@ -1683,6 +1699,14 @@ public final class NewChunkHolder {
+         boolean canSavePOI = !forceNoSaveChunk && (poi != null && poi.isDirty());
+         boolean canSaveEntities = entities != null;
+ 
++
++        //ASP start - prevent saving
++        if (world instanceof com.infernalsuite.asp.level.SlimeLevelInstance) {
++            canSaveEntities = false;
++        }
++        //ASP end - prevent saving
++
++
+         if (canSaveChunk) {
+             canSaveChunk = this.saveChunk(chunk, false, null);
+         }
+@@ -1695,12 +1719,12 @@ public final class NewChunkHolder {
+         }
+ 
+         return executedUnloadTask | canSaveChunk | canSaveEntities | canSavePOI ?
+-                new SaveStat(
+-                        canSaveChunk | executedUnloadTasks[MoonriseRegionFileIO.RegionFileType.CHUNK_DATA.ordinal()],
+-                        canSaveEntities | executedUnloadTasks[MoonriseRegionFileIO.RegionFileType.ENTITY_DATA.ordinal()],
+-                        canSavePOI | executedUnloadTasks[MoonriseRegionFileIO.RegionFileType.POI_DATA.ordinal()]
+-                )
+-                : null;
++            new SaveStat(
++                canSaveChunk | executedUnloadTasks[MoonriseRegionFileIO.RegionFileType.CHUNK_DATA.ordinal()],
++                canSaveEntities | executedUnloadTasks[MoonriseRegionFileIO.RegionFileType.ENTITY_DATA.ordinal()],
++                canSavePOI | executedUnloadTasks[MoonriseRegionFileIO.RegionFileType.POI_DATA.ordinal()]
++            )
++            : null;
+     }
+ 
+     private boolean saveChunk(final ChunkAccess chunk, final boolean unloading, final Completable<CompoundTag>[] chunkSave) {
+@@ -1761,8 +1785,10 @@ public final class NewChunkHolder {
+     }
+ 
+     private boolean lastEntitySaveNull;
++
+     private boolean saveEntities(final ChunkEntitySlices entities, final boolean unloading, final Completable<CompoundTag>[] entitySave) {
+-        if (org.dreeam.leaf.config.modules.misc.DisableWorldDataSaving.shouldSkipSave(this.world)) return false; // Leaf - disable world data saving
++        if (org.dreeam.leaf.config.modules.misc.DisableWorldDataSaving.shouldSkipSave(this.world))
++            return false; // Leaf - disable world data saving
+         try {
+             if (entities.isTransient()) {
+                 if (!unloading) {
+@@ -1818,6 +1844,7 @@ public final class NewChunkHolder {
+     }
+ 
+     private boolean lastPoiSaveNull;
++
+     private boolean savePOI(final PoiChunk poi, final boolean unloading, final Completable<CompoundTag>[] poiSave) {
+         // Leaf start - disable world data saving
+         if (org.dreeam.leaf.config.modules.misc.DisableWorldDataSaving.shouldSkipSave(this.world)) {
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkLoadTask.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkLoadTask.java
+index 7463cf5bf871033a0e5f6d54dd0d427c474d7cd4..89317c6180abaa7a6e196d4cac2b7aa29eac8a4e 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkLoadTask.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkLoadTask.java
+@@ -11,7 +11,6 @@ import ca.spottedleaf.moonrise.patches.chunk_system.io.MoonriseRegionFileIO;
+ import ca.spottedleaf.moonrise.patches.chunk_system.level.poi.PoiChunk;
+ import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler;
+ import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder;
+-import net.minecraft.core.registries.Registries;
+ import net.minecraft.nbt.CompoundTag;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.world.level.ChunkPos;
+@@ -23,6 +22,7 @@ import net.minecraft.world.level.chunk.storage.SerializableChunkData;
+ import net.minecraft.world.level.levelgen.blending.BlendingData;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
++
+ import java.lang.invoke.VarHandle;
+ import java.util.Map;
+ import java.util.concurrent.atomic.AtomicInteger;
+@@ -33,7 +33,7 @@ public final class ChunkLoadTask extends ChunkProgressionTask {
+     private static final Logger LOGGER = LoggerFactory.getLogger(ChunkLoadTask.class);
+ 
+     private final NewChunkHolder chunkHolder;
+-    private final ChunkDataLoadTask loadTask;
++    private final com.infernalsuite.asp.level.moonrise.CommonLoadTask loadTask; // ASP
+ 
+     private volatile boolean cancelled;
+     private NewChunkHolder.GenericDataLoadTaskCallback entityLoadTask;
+@@ -45,11 +45,20 @@ public final class ChunkLoadTask extends ChunkProgressionTask {
+                          final NewChunkHolder chunkHolder, final Priority priority) {
+         super(scheduler, world, chunkX, chunkZ);
+         this.chunkHolder = chunkHolder;
+-        this.loadTask = new ChunkDataLoadTask(scheduler, world, chunkX, chunkZ, priority);
+-        this.loadTask.addCallback((final GenericDataLoadTask.TaskResult<ChunkAccess, Throwable> result) -> {
+-            ChunkLoadTask.this.loadResult = result; // must be before getAndDecrement
+-            ChunkLoadTask.this.tryCompleteLoad();
+-        });
++        // ASWM start
++        if (world instanceof com.infernalsuite.asp.level.SlimeLevelInstance levelInstance) {
++            this.loadTask = levelInstance.getLoadTask(this, scheduler, world, chunkX, chunkZ, priority, result -> {
++                ChunkLoadTask.this.loadResult = result; // must be before getAndDecrement
++                ChunkLoadTask.this.tryCompleteLoad();
++            });
++        } else {
++            this.loadTask = new ChunkDataLoadTask(scheduler, world, chunkX, chunkZ, priority);
++            ((ChunkDataLoadTask) this.loadTask).addCallback((final GenericDataLoadTask.TaskResult<ChunkAccess, Throwable> result) -> {
++                ChunkLoadTask.this.loadResult = result; // must be before getAndDecrement
++                ChunkLoadTask.this.tryCompleteLoad();
++            });
++        }
++        // ASWM end
+     }
+ 
+     private void tryCompleteLoad() {
+@@ -95,14 +104,14 @@ public final class ChunkLoadTask extends ChunkProgressionTask {
+                 return;
+             }
+             if (!this.chunkHolder.isEntityChunkNBTLoaded()) {
+-                entityLoadTask = this.chunkHolder.getOrLoadEntityData((Consumer)scheduleLoadTask);
++                entityLoadTask = this.chunkHolder.getOrLoadEntityData((Consumer) scheduleLoadTask);
+             } else {
+                 entityLoadTask = null;
+                 this.tryCompleteLoad();
+             }
+ 
+             if (!this.chunkHolder.isPoiChunkLoaded()) {
+-                poiLoadTask = this.chunkHolder.getOrLoadPoiData((Consumer)scheduleLoadTask);
++                poiLoadTask = this.chunkHolder.getOrLoadPoiData((Consumer) scheduleLoadTask);
+             } else {
+                 poiLoadTask = null;
+                 this.tryCompleteLoad();
+@@ -223,7 +232,7 @@ public final class ChunkLoadTask extends ChunkProgressionTask {
+         this.loadTask.raisePriority(priority);
+     }
+ 
+-    protected static abstract class CallbackDataLoadTask<OnMain,FinalCompletion> extends GenericDataLoadTask<OnMain,FinalCompletion> {
++    protected static abstract class CallbackDataLoadTask<OnMain, FinalCompletion> extends GenericDataLoadTask<OnMain, FinalCompletion> {
+ 
+         private TaskResult<FinalCompletion, Throwable> result;
+         private final MultiThreadedQueue<Consumer<TaskResult<FinalCompletion, Throwable>>> waiters = new MultiThreadedQueue<>();
+@@ -253,7 +262,7 @@ public final class ChunkLoadTask extends ChunkProgressionTask {
+ 
+         @Override
+         protected void onComplete(final TaskResult<FinalCompletion, Throwable> result) {
+-            if ((boolean)COMPLETED_HANDLE.getAndSet((CallbackDataLoadTask)this, (boolean)true)) {
++            if ((boolean) COMPLETED_HANDLE.getAndSet((CallbackDataLoadTask) this, (boolean) true)) {
+                 throw new IllegalStateException("Already completed");
+             }
+             this.result = result;
+@@ -274,9 +283,10 @@ public final class ChunkLoadTask extends ChunkProgressionTask {
+     }
+ 
+ 
+-    private static record ReadChunk(ProtoChunk protoChunk, SerializableChunkData chunkData) {}
++    private static record ReadChunk(ProtoChunk protoChunk, SerializableChunkData chunkData) {
++    }
+ 
+-    private static final class ChunkDataLoadTask extends CallbackDataLoadTask<ReadChunk, ChunkAccess> {
++    private static final class ChunkDataLoadTask extends CallbackDataLoadTask<ReadChunk, ChunkAccess> implements com.infernalsuite.asp.level.moonrise.CommonLoadTask { // ASP
+         private ChunkDataLoadTask(final ChunkTaskScheduler scheduler, final ServerLevel world, final int chunkX,
+                                   final int chunkZ, final Priority priority) {
+             super(scheduler, world, chunkX, chunkZ, MoonriseRegionFileIO.RegionFileType.CHUNK_DATA, priority);
+@@ -323,7 +333,7 @@ public final class ChunkLoadTask extends ChunkProgressionTask {
+         private ProtoChunk getEmptyChunk() {
+             return new ProtoChunk(
+                 new ChunkPos(this.chunkX, this.chunkZ), UpgradeData.EMPTY, this.world,
+-                this.world.palettedContainerFactory(), (BlendingData)null
++                this.world.palettedContainerFactory(), (BlendingData) null
+             );
+         }
+ 
