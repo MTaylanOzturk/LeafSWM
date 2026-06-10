@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MahmutTaylanOzturk <ozturkmahmuttaylan@gmail.com>
+Date: Wed, 10 Jun 2026 16:00:05 +0000
+Subject: [PATCH] Make getSlopeDistance fluid slope cache thread-safe
+
+The BFS getSlopeDistance cache stored its visited set and node deque on
+ServerLevel and reused them across calls. With parallel world ticking these
+shared buffers can be touched by more than one thread, corrupting fluid spread
+(e.g. cobblestone generators leaving ghost blocks and no longer regenerating).
+Move the scratch buffers to ThreadLocal so each ticking thread reuses its own,
+keeping the allocation savings while being safe under concurrency. Also drops
+the now-unused ServerLevel cache fields.
+
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index c77628a1f9be15032a2afbe460a3a2a3d4df020b..e3fec505774bb979cb1b97679747b859666051f7 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -1578,10 +1578,6 @@ public class ServerLevel extends Level implements ServerEntityGetter, WorldGenLe
+         this.emptyTime = 0;
+     }
+ 
+-    // Leaf start - Use BFS on getSlopeDistance
+-    public it.unimi.dsi.fastutil.longs.LongSet slopeDistanceCacheVisited = new it.unimi.dsi.fastutil.longs.LongOpenHashSet(512);
+-    public net.minecraft.world.level.material.FlowingFluid.SlopeDistanceNodeDeque slopeDistanceCacheQueue = new net.minecraft.world.level.material.FlowingFluid.SlopeDistanceNodeDeque();
+-    // Leaf end - Use BFS on getSlopeDistance
+     private void tickFluid(BlockPos pos, Fluid fluid) {
+         BlockState blockState = this.getBlockState(pos);
+         FluidState fluidState = blockState.getFluidState();
+diff --git a/net/minecraft/world/level/material/FlowingFluid.java b/net/minecraft/world/level/material/FlowingFluid.java
+index 33abd4f0b812dfdbf789b45f22b0416697c34033..7e894505ba0d74e1811cf9114a6816e7108d92f3 100644
+--- a/net/minecraft/world/level/material/FlowingFluid.java
++++ b/net/minecraft/world/level/material/FlowingFluid.java
+@@ -344,9 +344,14 @@ public abstract class FlowingFluid extends Fluid {
+     protected abstract void beforeDestroyingBlock(LevelAccessor level, BlockPos pos, BlockState state);
+ 
+     // Leaf start - Use BFS on getSlopeDistance
++    // Thread-local scratch buffers so getSlopeDistance is safe when worlds are ticked on multiple threads (parallel world ticking).
++    // Sharing these on ServerLevel let concurrent fluid ticks corrupt each other, breaking fluid spread (e.g. cobblestone generators stop regenerating / desync).
++    private static final ThreadLocal<it.unimi.dsi.fastutil.longs.LongSet> SLOPE_DISTANCE_VISITED = ThreadLocal.withInitial(() -> new it.unimi.dsi.fastutil.longs.LongOpenHashSet(512));
++    private static final ThreadLocal<SlopeDistanceNodeDeque> SLOPE_DISTANCE_QUEUE = ThreadLocal.withInitial(SlopeDistanceNodeDeque::new);
++
+     protected int getSlopeDistance(LevelReader level, BlockPos startPos, int initialDepth, Direction excludedDirection, BlockState startState, FlowingFluid.SpreadContext spreadContext) {
+-        it.unimi.dsi.fastutil.longs.LongSet visited = ((ServerLevel) level).slopeDistanceCacheVisited;
+-        SlopeDistanceNodeDeque queue = ((ServerLevel) level).slopeDistanceCacheQueue;
++        it.unimi.dsi.fastutil.longs.LongSet visited = SLOPE_DISTANCE_VISITED.get();
++        SlopeDistanceNodeDeque queue = SLOPE_DISTANCE_QUEUE.get();
+         visited.clear();
+         queue.clear();
+ 
