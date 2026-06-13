@@ -10,7 +10,7 @@ import com.mongodb.client.gridfs.GridFSBuckets;
 import com.mongodb.client.gridfs.model.GridFSFile;
 import com.mongodb.client.model.*;
 import org.bson.Document;
-import org.bson.conversions.Bson;
+import org.bson.types.ObjectId;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +20,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class MongoLoader extends UpdatableLoader {
 
@@ -28,6 +29,17 @@ public class MongoLoader extends UpdatableLoader {
     private final MongoClient client;
     private final String database;
     private final String collection;
+
+    // Dünya başına kilit: aynı dünyanın eşzamanlı kayıt/sil işlemlerini sıraya sokar. Aksi halde
+    // ASP'nin iç (async) autosave'i ile bir başka kayıt aynı GridFS dosyasında çakışıp
+    // "No file found with the id" hatasına, mükerrer dosyalara ve okumada yanlış revizyonun
+    // seçilmesine (dünyanın eski hâle dönmesi) yol açıyordu. Kilit dünya başına olduğundan
+    // farklı dünyalar paralel kaydedilmeye devam eder.
+    private final ConcurrentHashMap<String, Object> worldLocks = new ConcurrentHashMap<>();
+
+    private Object lockFor(String worldName) {
+        return worldLocks.computeIfAbsent(worldName, k -> new Object());
+    }
 
     public MongoLoader(String database, String collection, @Nullable String username, @Nullable String password,
                        @Nullable String authSource, @Nullable String host, @Nullable Integer port, @Nullable String uri) throws MongoException {
@@ -159,21 +171,29 @@ public class MongoLoader extends UpdatableLoader {
         try {
             MongoDatabase mongoDatabase = client.getDatabase(database);
             GridFSBucket bucket = GridFSBuckets.create(mongoDatabase, collection);
-            GridFSFile oldFile = bucket.find(Filters.eq("filename", worldName)).first();
-
-            bucket.uploadFromStream(worldName, new ByteArrayInputStream(serializedWorld));
-
-            if (oldFile != null) {
-                bucket.delete(oldFile.getObjectId());
-            }
-
             MongoCollection<Document> mongoCollection = mongoDatabase.getCollection(collection);
-            Bson query = Filters.eq("name", worldName);
-            mongoCollection.updateOne(
-                    query,
-                    new Document().append("$set", query),
-                    new UpdateOptions().upsert(true)
-            );
+
+            // Aynı dünyanın eşzamanlı kayıtlarını sıraya sok (dünya başına kilit). Bu blok atomik
+            // davranır: önce yeni revizyon yüklenir, sonra bu isimdeki DİĞER tüm revizyonlar silinir.
+            synchronized (lockFor(worldName)) {
+                // 1) Yeni revizyonu yükle. Yükleme bitene kadar eski dosya okunabilir kalır.
+                ObjectId newId = bucket.uploadFromStream(worldName, new ByteArrayInputStream(serializedWorld));
+
+                // 2) Bu isimdeki diğer tüm revizyonları (eski + önceki yarışlardan kalan yetim/mükerrer
+                //    dosyalar) temizle → geriye tam olarak TEK dosya kalır, okuma daima belirleyicidir.
+                for (GridFSFile file : bucket.find(Filters.eq("filename", worldName))) {
+                    if (!file.getObjectId().equals(newId)) {
+                        bucket.delete(file.getObjectId());
+                    }
+                }
+
+                // 3) İsim indeksini upsert et (readWorld/worldExists bu dokümana bakar).
+                mongoCollection.updateOne(
+                        Filters.eq("name", worldName),
+                        new Document("$set", new Document("name", worldName)),
+                        new UpdateOptions().upsert(true)
+                );
+            }
         } catch (MongoException ex) {
             throw new IOException(ex);
         }
@@ -182,23 +202,30 @@ public class MongoLoader extends UpdatableLoader {
     @Override
     public void deleteWorld(String worldName) throws IOException, UnknownWorldException {
         try {
-            MongoDatabase mongoDatabase = client.getDatabase(database);
-            GridFSBucket bucket = GridFSBuckets.create(mongoDatabase, collection);
-            GridFSFile file = bucket.find(Filters.eq("filename", worldName)).first();
+            synchronized (lockFor(worldName)) {
+                MongoDatabase mongoDatabase = client.getDatabase(database);
+                GridFSBucket bucket = GridFSBuckets.create(mongoDatabase, collection);
 
-            if (file == null) {
-                throw new UnknownWorldException(worldName);
+                // Bu isimdeki TÜM revizyonları sil (önceki yarışlardan kalan mükerrerler dahil),
+                // sadece ilkini değil — aksi halde yetim dosyalar GridFS'te kalıcı olarak birikiyordu.
+                boolean found = false;
+                for (GridFSFile file : bucket.find(Filters.eq("filename", worldName))) {
+                    bucket.delete(file.getObjectId());
+                    found = true;
+                }
+
+                if (!found) {
+                    throw new UnknownWorldException(worldName);
+                }
+
+                // Delete backup file
+                for (GridFSFile backupFile : bucket.find(Filters.eq("filename", worldName + "_backup"))) {
+                    bucket.delete(backupFile.getObjectId());
+                }
+
+                MongoCollection<Document> mongoCollection = mongoDatabase.getCollection(collection);
+                mongoCollection.deleteOne(Filters.eq("name", worldName));
             }
-
-            bucket.delete(file.getObjectId());
-
-            // Delete backup file
-            for (GridFSFile backupFile : bucket.find(Filters.eq("filename", worldName + "_backup"))) {
-                bucket.delete(backupFile.getObjectId());
-            }
-
-            MongoCollection<Document> mongoCollection = mongoDatabase.getCollection(collection);
-            mongoCollection.deleteOne(Filters.eq("name", worldName));
         } catch (MongoException ex) {
             throw new IOException(ex);
         }
