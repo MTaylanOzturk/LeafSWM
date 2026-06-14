@@ -780,7 +780,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..d53a97e9968195a0ea88594a5a44ac1469075bb2
 --- /dev/null
 +++ b/com/infernalsuite/asp/SlimeNMSBridgeImpl.java
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,236 @@
 +package com.infernalsuite.asp;
 +
 +import com.infernalsuite.asp.api.SlimeDataConverter;
@@ -990,8 +990,21 @@ index 0000000000000000000000000000000000000000..d53a97e9968195a0ea88594a5a44ac14
 +        String worldName = world.getName();
 +        WorldLoader.DataLoadContext context = mcServer.worldLoaderContext;
 +
++        var enabledFeatures = context.dataConfiguration().enabledFeatures();
++
++        // Restore game rules persisted in the slime world's extra data so they survive a restart.
++        // Previously only SlimeProperties.PVP was applied here, so every other rule reset to defaults on load.
++        GameRules gameRules = new GameRules(enabledFeatures, GameRuleMap.of());
++        var savedGameRules = world.getExtraData().get("gamerules");
++        if (savedGameRules != null) {
++            gameRules = GameRules.createCodec(enabledFeatures)
++                    .parse(net.minecraft.nbt.NbtOps.INSTANCE, Converter.convertTag(savedGameRules))
++                    .result()
++                    .orElse(gameRules);
++        }
++
 +        LevelSettings worldsettings = new LevelSettings(worldName, serverProps.gameMode.get(), false, serverProps.difficulty.get(),
-+                true, new GameRules(context.dataConfiguration().enabledFeatures(), GameRuleMap.of()), mcServer.worldLoaderContext.dataConfiguration());
++                true, gameRules, context.dataConfiguration());
 +
 +        WorldOptions worldoptions = new WorldOptions(0, false, false);
 +
@@ -1135,7 +1148,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..d7ba6e9cbcd81b72914986a0257abf7ad985ebd8
 --- /dev/null
 +++ b/com/infernalsuite/asp/level/SlimeInMemoryWorld.java
-@@ -0,0 +1,300 @@
+@@ -0,0 +1,307 @@
 +package com.infernalsuite.asp.level;
 +
 +import ca.spottedleaf.moonrise.patches.chunk_system.level.entity.ChunkEntitySlices;
@@ -1354,6 +1367,13 @@ index 0000000000000000000000000000000000000000..d7ba6e9cbcd81b72914986a0257abf7a
 +        // Bukkit stores the relevant tag as a tag with the key "BukkitValues" in the tag we supply to it
 +        var adventureTag = Converter.convertTag(nmsTag.getCompoundOrEmpty("BukkitValues"));
 +        world.getExtraData().put("BukkitValues", adventureTag);
++
++        // Serialize game rules so they survive a restart. ASP only restored SlimeProperties.PVP,
++        // which left rules like keepInventory/doDaylightCycle resetting to defaults on reload.
++        net.minecraft.world.level.gamerules.GameRules.createCodec(this.instance.enabledFeatures())
++                .encodeStart(net.minecraft.nbt.NbtOps.INSTANCE, this.instance.getGameRules())
++                .result()
++                .ifPresent(gameRulesTag -> world.getExtraData().put("gamerules", Converter.convertTag(gameRulesTag)));
 +
 +        return new SkeletonSlimeWorld(world.getName(),
 +                world.getLoader(),
