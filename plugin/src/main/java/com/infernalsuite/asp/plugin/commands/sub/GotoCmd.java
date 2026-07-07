@@ -72,6 +72,9 @@ public class GotoCmd extends SlimeCommand {
             spawnLocation = world.getSpawnLocation();
         }
 
+        for (Entity passenger : finalTarget.getPassengers()) {
+            finalTarget.removePassenger(passenger);
+        }
         finalTarget.teleportAsync(spawnLocation);
     }
 }
