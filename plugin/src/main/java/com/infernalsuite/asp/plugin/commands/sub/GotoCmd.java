@@ -10,6 +10,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.incendo.cloud.annotations.Argument;
 import org.incendo.cloud.annotations.Command;
@@ -72,6 +73,14 @@ public class GotoCmd extends SlimeCommand {
             spawnLocation = world.getSpawnLocation();
         }
 
+        // A player carrying passengers (e.g. a name-tag text display mounted by another plugin)
+        // cannot be teleported across worlds: Paper's teleport returns false and the player never
+        // moves. Drop the passengers first so the cross-world teleport succeeds; whoever owns them
+        // is responsible for re-attaching on arrival. getPassengers() returns a fresh copy, so
+        // removing while iterating is safe.
+        for (Entity passenger : finalTarget.getPassengers()) {
+            finalTarget.removePassenger(passenger);
+        }
         finalTarget.teleportAsync(spawnLocation);
     }
 }
