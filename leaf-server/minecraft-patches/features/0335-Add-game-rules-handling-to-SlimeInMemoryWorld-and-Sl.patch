@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MahmutTaylanOzturk <ozturkmahmuttaylan@gmail.com>
+Date: Sun, 14 Jun 2026 10:53:11 +0300
+Subject: [PATCH] Add game rules handling to SlimeInMemoryWorld and
+ SlimeNMSBridgeImpl for enhanced world data management
+
+
+diff --git a/com/infernalsuite/asp/SlimeNMSBridgeImpl.java b/com/infernalsuite/asp/SlimeNMSBridgeImpl.java
+index d53a97e9968195a0ea88594a5a44ac1469075bb2..20ccc109393d31d220bb0716bc65b5768deb7145 100644
+--- a/com/infernalsuite/asp/SlimeNMSBridgeImpl.java
++++ b/com/infernalsuite/asp/SlimeNMSBridgeImpl.java
+@@ -207,8 +207,19 @@ public class SlimeNMSBridgeImpl implements SlimeNMSBridge {
+         String worldName = world.getName();
+         WorldLoader.DataLoadContext context = mcServer.worldLoaderContext;
+ 
++        var enabledFeatures = context.dataConfiguration().enabledFeatures();
++
++        GameRules gameRules = new GameRules(enabledFeatures, GameRuleMap.of());
++        var savedGameRules = world.getExtraData().get("gamerules");
++        if (savedGameRules != null) {
++            gameRules = GameRules.codec(enabledFeatures)
++                .parse(net.minecraft.nbt.NbtOps.INSTANCE, Converter.convertTag(savedGameRules))
++                .result()
++                .orElse(gameRules);
++        }
++
+         LevelSettings worldsettings = new LevelSettings(worldName, serverProps.gameMode.get(), false, serverProps.difficulty.get(),
+-                true, new GameRules(context.dataConfiguration().enabledFeatures(), GameRuleMap.of()), mcServer.worldLoaderContext.dataConfiguration());
++            true, gameRules, context.dataConfiguration());
+ 
+         WorldOptions worldoptions = new WorldOptions(0, false, false);
+ 
+diff --git a/com/infernalsuite/asp/level/SlimeInMemoryWorld.java b/com/infernalsuite/asp/level/SlimeInMemoryWorld.java
+index d7ba6e9cbcd81b72914986a0257abf7ad985ebd8..9b4ec1271e7018e35b0373c2071e94f6b275f3cf 100644
+--- a/com/infernalsuite/asp/level/SlimeInMemoryWorld.java
++++ b/com/infernalsuite/asp/level/SlimeInMemoryWorld.java
+@@ -217,6 +217,14 @@ public class SlimeInMemoryWorld implements SlimeWorld, SlimeWorldInstance {
+         var adventureTag = Converter.convertTag(nmsTag.getCompoundOrEmpty("BukkitValues"));
+         world.getExtraData().put("BukkitValues", adventureTag);
+ 
++        net.minecraft.world.level.gamerules.GameRules.codec(this.instance.enabledFeatures())
++            .encodeStart(net.minecraft.nbt.NbtOps.INSTANCE, this.instance.getGameRules())
++            .result()
++            .ifPresent(gameRulesTag -> {
++                var gameRulesAdventureTag = Converter.convertTag(gameRulesTag);
++                world.getExtraData().put("gamerules", gameRulesAdventureTag);
++            });
++
+         return new SkeletonSlimeWorld(world.getName(),
+                 world.getLoader(),
+                 world.isReadOnly(),
